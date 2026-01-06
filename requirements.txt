@@ -1,0 +1,57 @@
+# OpenPCSeg Requirements File
+#
+# Installation:
+#   pip install -r requirements.txt
+#
+# Note: PyTorch should be installed first with CUDA support:
+#   conda install pytorch==1.10.0 torchvision==0.11.0 cudatoolkit=11.3 -c pytorch -c conda-forge
+#
+# Custom packages (torchsparse, range_lib) must be installed separately
+# See docs/INSTALL.md for complete installation guide
+
+# Core dependencies
+tqdm
+pyyaml
+easydict
+numba
+strictyaml
+llvmlite
+scikit-image
+opencv-python
+prettytable
+SharedArray
+
+# Vision Transformer support (for Swin Transformer range branch)
+timm>=0.9.0
+
+# Dataset support
+nuscenes-devkit
+
+# Training and visualization
+tensorboard
+matplotlib
+scipy
+
+# Build tools
+setuptools==59.5.0
+
+# PyTorch Scatter (install via conda recommended)
+# conda install pytorch-scatter -c pyg
+# or: pip install torch-scatter -f https://data.pyg.org/whl/torch-1.10.0+cu113.html
+
+# Development tools (optional)
+ipython
+jupyter
+
+# -----------------------------------------------------------------------------
+# Manual installation required (see docs/INSTALL.md):
+# -----------------------------------------------------------------------------
+# 1. TorchSparse (sparse convolution library)
+#    cd package/ && pip install ./torchsparse
+#
+# 2. Range Image Library
+#    cd package/range_lib/ && python setup.py install
+#
+# 3. Register PCSeg package
+#    python setup.py develop
+# -----------------------------------------------------------------------------
