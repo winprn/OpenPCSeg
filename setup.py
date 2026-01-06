@@ -25,6 +25,7 @@ if __name__ == '__main__':
         description='PCSeg: Open Source Point Cloud Segmentation Toolbox and Benchmark',
         install_requires=[
             'tqdm',
+            'timm>=0.9.0',  # For Swin Transformer pretrained models
         ],
         author='PJLAB-ADG',
         license='Apache License',

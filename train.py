@@ -322,6 +322,24 @@ class Trainer:
         total_it_each_epoch = len(self.loader)
         dataloader_iter = iter(self.loader)
 
+        # Handle Swin Transformer encoder freezing/unfreezing
+        freeze_epochs = self.cfgs.OPTIM.get('FREEZE_RANGE_EPOCHS', 0)
+        if freeze_epochs > 0:
+            if hasattr(self.model, 'range_branch'):
+                range_branch = self.model.range_branch if not hasattr(self.model, 'module') else self.model.module.range_branch
+                if hasattr(range_branch, 'swin_branch'):
+                    if self.cur_epoch < freeze_epochs:
+                        # Freeze Swin encoder
+                        for param in range_branch.swin_branch.backbone.parameters():
+                            param.requires_grad = False
+                        if self.cur_epoch == 0 and self.rank == 0:
+                            self.logger.info(f'==> Freezing Swin encoder for first {freeze_epochs} epochs')
+                    elif self.cur_epoch == freeze_epochs and self.rank == 0:
+                        # Unfreeze Swin encoder
+                        for param in range_branch.swin_branch.backbone.parameters():
+                            param.requires_grad = True
+                        self.logger.info(f'==> Unfreezing Swin encoder at epoch {freeze_epochs}')
+
         if self.sampler is not None:
             self.sampler.set_epoch(self.cur_epoch)
 

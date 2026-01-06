@@ -41,13 +41,40 @@ def build_optimizer(model, optim_cfg):
         )
     
     elif optim_cfg.OPTIMIZER == 'adamw':
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=optim_cfg.LR,
-            betas=(optim_cfg.BETA1, optim_cfg.BETA2),
-            weight_decay=optim_cfg.WEIGHT_DECAY,
-            eps=optim_cfg.EPS,
-        )
+        # Support differential learning rates for Swin Transformer range branch
+        lr_range_ratio = optim_cfg.get('LR_RANGE_RATIO', None)
+
+        if lr_range_ratio is not None:
+            # Create parameter groups with different learning rates
+            range_branch_params = []
+            other_params = []
+
+            for name, param in model.named_parameters():
+                if 'range_branch.swin_branch.backbone' in name:
+                    range_branch_params.append(param)
+                else:
+                    other_params.append(param)
+
+            param_groups = [
+                {'params': range_branch_params, 'lr': optim_cfg.LR * lr_range_ratio},
+                {'params': other_params, 'lr': optim_cfg.LR}
+            ]
+
+            optimizer = optim.AdamW(
+                param_groups,
+                betas=(optim_cfg.get('BETA1', 0.9), optim_cfg.get('BETA2', 0.999)),
+                weight_decay=optim_cfg.WEIGHT_DECAY,
+                eps=optim_cfg.get('EPS', 1e-8),
+            )
+        else:
+            # Standard AdamW without differential learning rates
+            optimizer = optim.AdamW(
+                model.parameters(),
+                lr=optim_cfg.LR,
+                betas=(optim_cfg.get('BETA1', 0.9), optim_cfg.get('BETA2', 0.999)),
+                weight_decay=optim_cfg.WEIGHT_DECAY,
+                eps=optim_cfg.get('EPS', 1e-8),
+            )
     
     elif optim_cfg.OPTIMIZER == 'adam_onecycle':
         def children(m: nn.Module):

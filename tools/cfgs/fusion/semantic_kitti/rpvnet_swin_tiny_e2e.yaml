@@ -1,0 +1,45 @@
+MODALITY: 'fusion'
+
+DATA:
+    DATASET: 'semantickitti'
+    PETRELOSS_CONFIG: None
+    DATA_PATH: 'data_root/SemanticKITTI/sequences/'
+    VOXEL_SIZE: 0.05
+    AUGMENT: 'GlobalAugment_LP'
+    NUM_POINTS: 1000000
+    TRAINVAL: False
+    TTA: False
+
+MODEL:
+    NAME: RPVNet
+    IGNORE_LABEL: 0
+    IN_FEATURE_DIM: 5
+    BLOCK: Bottleneck
+    NUM_LAYER: [2, 3, 4, 6, 2, 2, 2, 2]
+    PLANES: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+    cr: 1.75
+
+    # Swin Transformer Range Branch Configuration
+    RANGE_BRANCH: 'SwinRangeBranch'
+    SWIN_VARIANT: 'swin_tiny_patch4_window7_224'
+    SWIN_PRETRAINED: True
+    SWIN_PRETRAINED_SOURCE: 'imagenet-1k'
+    SWIN_WINDOW_SIZE: [7, 7]
+
+    DROPOUT_P: 0.3
+    LABEL_SMOOTHING: 0.0
+    IF_DIST: True
+
+OPTIM:
+    BATCH_SIZE_PER_GPU: 8
+    NUM_EPOCHS: 50
+    OPTIMIZER: adamw
+    LR_PER_SAMPLE: 0.00005       # Even lower LR for end-to-end stability
+    LR_RANGE_RATIO: 0.1
+    WEIGHT_DECAY: 0.01
+    GRAD_NORM_CLIP: 10
+    SCHEDULER: linear_warmup_with_cosdecay
+    WARMUP_EPOCH: 3              # Longer warmup for end-to-end training
+
+    # End-to-end training (no freezing)
+    FREEZE_RANGE_EPOCHS: 0       # Train all components from start

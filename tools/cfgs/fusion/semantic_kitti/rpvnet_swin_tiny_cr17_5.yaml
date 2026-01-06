@@ -1,0 +1,45 @@
+MODALITY: 'fusion'
+
+DATA:
+    DATASET: 'semantickitti'  # choices: ['nuscenes', 'semantickitti', 'scribblekitti']
+    PETRELOSS_CONFIG: None
+    DATA_PATH: 'data_root/SemanticKITTI/sequences/'
+    VOXEL_SIZE: 0.05
+    AUGMENT: 'GlobalAugment_LP'  # choices: ['GlobalAugment', 'GlobalAugment_LP']
+    NUM_POINTS: 1000000
+    TRAINVAL: False              # train set: train + val
+    TTA: False
+
+MODEL:
+    NAME: RPVNet
+    IGNORE_LABEL: 0
+    IN_FEATURE_DIM: 5
+    BLOCK: Bottleneck            # Use Bottleneck for better capacity
+    NUM_LAYER: [2, 3, 4, 6, 2, 2, 2, 2]
+    PLANES: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+    cr: 1.75
+
+    # Swin Transformer Range Branch Configuration
+    RANGE_BRANCH: 'SwinRangeBranch'              # Use Swin instead of SalsaNext
+    SWIN_VARIANT: 'swin_tiny_patch4_window7_224' # Swin-Tiny for efficiency
+    SWIN_PRETRAINED: True                         # Use ImageNet-1K pretrained weights
+    SWIN_PRETRAINED_SOURCE: 'imagenet-1k'        # Pretrained source
+    SWIN_WINDOW_SIZE: [7, 7]                     # Window size (default 7x7, can use [8,16] for aspect ratio)
+
+    DROPOUT_P: 0.3               # Higher dropout for transformer (regularization)
+    LABEL_SMOOTHING: 0.0
+    IF_DIST: True                # True: multi-gpus, False: single gpu
+
+OPTIM:
+    BATCH_SIZE_PER_GPU: 8        # Reduced from 16 due to Swin memory usage
+    NUM_EPOCHS: 50               # More epochs for transformer fine-tuning
+    OPTIMIZER: adamw             # AdamW optimizer (better for transformers)
+    LR_PER_SAMPLE: 0.0001        # Lower LR for pretrained model
+    LR_RANGE_RATIO: 0.1          # Range branch uses 10% of base LR (differential LR)
+    WEIGHT_DECAY: 0.01           # Higher weight decay for ViT
+    GRAD_NORM_CLIP: 10
+    SCHEDULER: linear_warmup_with_cosdecay
+    WARMUP_EPOCH: 2              # Longer warmup for stability
+
+    # Two-stage training strategy
+    FREEZE_RANGE_EPOCHS: 10      # Freeze Swin encoder for first 10 epochs (0 = no freeze)
