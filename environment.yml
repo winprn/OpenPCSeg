@@ -1,0 +1,57 @@
+# Conda environment file for OpenPCSeg with Swin Transformer support
+#
+# Usage:
+#   conda env create -f environment.yml
+#   conda activate pcseg
+#
+# Then install custom packages (torchsparse, range_lib) as described in docs/INSTALL.md
+
+name: pcseg
+channels:
+  - pytorch
+  - conda-forge
+  - pyg
+  - defaults
+
+dependencies:
+  - python=3.7
+  - cudatoolkit=11.3
+  - pytorch=1.10.0
+  - torchvision=0.11.0
+  - pytorch-scatter
+  - numpy
+  - pip
+  - pip:
+    # Core dependencies
+    - tqdm
+    - pyyaml
+    - easydict
+    - numba
+    - strictyaml
+    - llvmlite
+    - scikit-image
+    - opencv-python
+    - prettytable
+    - SharedArray
+    - setuptools==59.5.0
+
+    # Vision Transformer support (NEW for Swin)
+    - timm>=0.9.0
+
+    # Dataset support
+    - nuscenes-devkit
+
+    # Training utilities
+    - tensorboard
+    - matplotlib
+    - scipy
+
+    # Development tools (optional)
+    - ipython
+    - jupyter
+
+    # Note: The following need to be installed separately from source:
+    # - torchsparse (from package/torchsparse.zip)
+    # - range_lib (from package/range_lib.zip)
+    # - torchpack (if needed)
+    # See docs/INSTALL.md for detailed installation instructions
