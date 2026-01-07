@@ -291,7 +291,25 @@ class SwinRangeBranch(nn.Module):
 
         # Extract hierarchical features from Swin backbone
         # Returns list of features at 4 scales: [1/4, 1/8, 1/16, 1/32]
-        swin_features = self.backbone(x)
+        swin_features_raw = self.backbone(x)
+
+        # Convert from [B, H, W, C] to [B, C, H, W] if needed
+        # timm's Swin returns features in channels-last format
+        swin_features = []
+        for i, feat in enumerate(swin_features_raw):
+            # Check if feature is in channels-last format [B, H, W, C]
+            # Expected channel dimension: self.swin_channels[i] (e.g., 96, 192, 384, 768)
+            if len(feat.shape) == 4:
+                # If last dimension matches expected channels, it's [B, H, W, C]
+                if feat.shape[-1] == self.swin_channels[i]:
+                    feat = feat.permute(0, 3, 1, 2).contiguous()
+                # If second dimension matches, it's already [B, C, H, W]
+                elif feat.shape[1] != self.swin_channels[i]:
+                    raise RuntimeError(
+                        f"Unexpected feature shape at scale {i}: {feat.shape}. "
+                        f"Expected channels: {self.swin_channels[i]}"
+                    )
+            swin_features.append(feat)
 
         # Project to target channel dimensions
         feat0 = self.proj_layers[0](swin_features[0])  # Stem output
