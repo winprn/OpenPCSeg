@@ -324,7 +324,7 @@ class SwinRangeBranch(nn.Module):
         return {
             'stem': feat0,                           # Early features (for fusion 0)
             'encoder_features': swin_features,       # Raw Swin features
-            'projected_features': [feat0, skip2, skip3, skip4],  # Projected features
+            'projected_features': [skip1, skip2, skip3, skip4],  # Stage outputs
             'skips': [skip1, skip2, skip3, skip4],  # Skip connections
             'bottleneck': skip4,                     # Bottleneck (for fusion 1)
             'decoder_outputs': decoder_outputs,      # [up1, up2, up3, up4]
