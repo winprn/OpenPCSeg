@@ -159,16 +159,24 @@ class SwinRangeBranch(nn.Module):
         swin_pretrained = model_cfgs.get('SWIN_PRETRAINED', True)
         window_size = model_cfgs.get('SWIN_WINDOW_SIZE', [7, 7])
 
+        # Range image size (H, W) - can be configured per dataset
+        # SemanticKITTI: (64, 2048), nuScenes: (32, 2048) after resize
+        self.range_img_size = model_cfgs.get('RANGE_IMG_SIZE', (64, 2048))
+
         # Load pretrained Swin Transformer from timm
         self.backbone = timm.create_model(
             swin_variant,
             pretrained=swin_pretrained,
             features_only=True,
             out_indices=(0, 1, 2, 3),  # 4 scales: 1/4, 1/8, 1/16, 1/32
+            img_size=self.range_img_size,  # Set to range image size (H, W)
         )
 
         # Get Swin output channels (e.g., [96, 192, 384, 768] for Swin-Tiny)
         self.swin_channels = self.backbone.feature_info.channels()
+
+        # Disable strict image size checking
+        self._disable_strict_img_size()
 
         # Adapt input layer from 3 channels (RGB) to 5 channels (range image)
         self._adapt_input_channels()
@@ -197,6 +205,21 @@ class SwinRangeBranch(nn.Module):
 
         # Output feature dimension (for RPVNet compatibility)
         self.num_point_features = self.target_channels[1]  # Final decoder output
+
+    def _disable_strict_img_size(self):
+        """
+        Disable strict image size checking in patch embedding layer.
+
+        This allows the model to accept range images of different sizes
+        instead of the default ImageNet size (224×224).
+        """
+        if hasattr(self.backbone, 'patch_embed'):
+            patch_embed = self.backbone.patch_embed
+            # Set strict_img_size to False if the attribute exists
+            if hasattr(patch_embed, 'strict_img_size'):
+                patch_embed.strict_img_size = False
+            # Also update img_size to our range image size
+            patch_embed.img_size = self.range_img_size
 
     def _adapt_input_channels(self):
         """
