@@ -27,7 +27,7 @@ def initial_voxelize(z, init_res, after_res):
     inserted_feat = F.spvoxelize(z.F, idx_query, counts)
 
     new_tensor = SparseTensor(inserted_feat, inserted_coords, 1)
-    new_tensor.cmaps.setdefault(new_tensor.stride, new_tensor.coords)
+    new_tensor._cache.cmaps.setdefault(new_tensor.stride, new_tensor.coords)
 
     z.additional_features['idx_query'][1] = idx_query
     z.additional_features['counts'][1] = counts
@@ -58,7 +58,7 @@ def point_to_voxel(x, z):
 
     inserted_feat = F.spvoxelize(z.F, idx_query, counts)
     new_tensor = SparseTensor(inserted_feat, x.C, x.s)
-    new_tensor.cmaps = x.cmaps
+    new_tensor._cache.cmaps = x._cache.cmaps
     new_tensor.kmaps = x.kmaps
 
     return new_tensor
