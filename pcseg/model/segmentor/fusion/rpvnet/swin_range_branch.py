@@ -163,6 +163,22 @@ class SwinRangeBranch(nn.Module):
         # SemanticKITTI: (64, 2048), nuScenes: (32, 2048) after resize
         self.range_img_size = model_cfgs.get('RANGE_IMG_SIZE', (64, 2048))
 
+        # Automatically adjust window size if default doesn't work
+        # After patch embedding (patch_size=4): H/4, W/4
+        # Window size must divide evenly into these dimensions
+        h_feat, w_feat = self.range_img_size[0] // 4, self.range_img_size[1] // 4
+
+        if window_size == [7, 7]:
+            # Auto-adjust window size to be compatible
+            # For 64×2048 → 16×512 after patch embed
+            # Use 8×8 (divides 16 and 512 evenly: 16/8=2, 512/8=64)
+            if h_feat % 7 != 0 or w_feat % 7 != 0:
+                window_size = [8, 8]
+                print(f"INFO: Auto-adjusted window size to {window_size} for compatibility")
+                print(f"      Feature map size after patch embed: ({h_feat}, {w_feat})")
+
+        self.window_size = window_size
+
         # Load pretrained Swin Transformer from timm
         self.backbone = timm.create_model(
             swin_variant,
@@ -170,6 +186,7 @@ class SwinRangeBranch(nn.Module):
             features_only=True,
             out_indices=(0, 1, 2, 3),  # 4 scales: 1/4, 1/8, 1/16, 1/32
             img_size=self.range_img_size,  # Set to range image size (H, W)
+            window_size=self.window_size,  # Use compatible window size
         )
 
         # Get Swin output channels (e.g., [96, 192, 384, 768] for Swin-Tiny)
@@ -180,10 +197,6 @@ class SwinRangeBranch(nn.Module):
 
         # Adapt input layer from 3 channels (RGB) to 5 channels (range image)
         self._adapt_input_channels()
-
-        # Optionally modify window size for aspect ratio
-        if window_size != [7, 7]:
-            self._modify_window_size(window_size)
 
         # Feature projection layers to match RPVNet channel dimensions
         self.proj_layers = nn.ModuleList([
@@ -258,22 +271,6 @@ class SwinRangeBranch(nn.Module):
 
         # Replace patch embedding projection
         patch_embed.proj = new_proj
-
-    def _modify_window_size(self, window_size):
-        """
-        Modify window size for rectangular attention windows.
-
-        WARNING: This may reduce effectiveness of pretrained weights.
-        Use only if you need to adapt to very elongated aspect ratios.
-
-        Args:
-            window_size: List [H, W] for window dimensions
-        """
-        # Note: Full implementation would require modifying each SwinTransformerBlock
-        # This is complex and may break pretrained weights
-        # For now, we use default 7x7 and document the option
-        print(f"WARNING: Custom window size {window_size} requested but not implemented.")
-        print("Using default 7x7 windows. To implement, modify SwinTransformerBlock directly.")
 
     def forward(self, x):
         """

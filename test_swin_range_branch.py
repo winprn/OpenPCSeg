@@ -37,6 +37,7 @@ def test_swin_range_branch():
         'SWIN_VARIANT': 'swin_tiny_patch4_window7_224',
         'SWIN_PRETRAINED': False,  # Use False for faster testing
         'SWIN_WINDOW_SIZE': [7, 7],
+        'RANGE_IMG_SIZE': [64, 512],  # Smaller for testing
     })
 
     # Test 1: Model initialization
@@ -87,6 +88,7 @@ def test_swin_range_branch():
     # Test 3: Wrapper compatibility
     print("\nTest 3: Wrapper API Compatibility")
     try:
+        # Use same model_cfgs as before (already has RANGE_IMG_SIZE)
         wrapper = SwinRangeBranchWrapper(model_cfgs, input_channels=5)
         print("✓ SwinRangeBranchWrapper initialized")
 
@@ -170,10 +172,12 @@ def test_rpvnet_integration():
             'MULTI_SCALE': 'concat',
             'DROPOUT_P': 0.3,
             'LABEL_SMOOTHING': 0.0,
+            'IGNORE_LABEL': 0,  # Add missing parameter
             'RANGE_BRANCH': 'SwinRangeBranch',
             'SWIN_VARIANT': 'swin_tiny_patch4_window7_224',
             'SWIN_PRETRAINED': False,
             'SWIN_WINDOW_SIZE': [7, 7],
+            'RANGE_IMG_SIZE': [64, 512],  # Smaller for testing
         })
 
         num_class = 20  # SemanticKITTI has 20 classes (excluding ignore)

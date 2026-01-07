@@ -24,7 +24,7 @@ MODEL:
     SWIN_VARIANT: 'swin_tiny_patch4_window7_224' # Swin-Tiny for efficiency
     SWIN_PRETRAINED: True                         # Use ImageNet-1K pretrained weights
     SWIN_PRETRAINED_SOURCE: 'imagenet-1k'        # Pretrained source
-    SWIN_WINDOW_SIZE: [7, 7]                     # Window size (default 7x7, can use [8,16] for aspect ratio)
+    SWIN_WINDOW_SIZE: [7, 7]                     # Auto-adjusted to [8,8] if incompatible
     RANGE_IMG_SIZE: [64, 2048]                   # Range image size (H, W) for SemanticKITTI
 
     DROPOUT_P: 0.3               # Higher dropout for transformer (regularization)
