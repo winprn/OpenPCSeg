@@ -59,7 +59,7 @@ def point_to_voxel(x, z):
     inserted_feat = F.spvoxelize(z.F, idx_query, counts)
     new_tensor = SparseTensor(inserted_feat, x.C, x.s)
     new_tensor._caches.cmaps = x._caches.cmaps
-    new_tensor.kmaps = x.kmaps
+    new_tensor._caches.kmaps = x._caches.kmaps
 
     return new_tensor
 
