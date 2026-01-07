@@ -15,7 +15,6 @@ import torch.nn.functional as F
 
 try:
     import timm
-    from timm.models import swin_transformer
 except ImportError:
     raise ImportError("timm library is required. Install with: pip install timm>=0.9.0")
 
