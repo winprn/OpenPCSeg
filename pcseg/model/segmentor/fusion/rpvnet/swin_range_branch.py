@@ -97,11 +97,11 @@ class SwinDecoder(nn.Module):
             if i == 0:
                 # First upsampling from bottleneck
                 in_ch = encoder_channels[-1]
-                skip_ch = encoder_channels[-(i+2)]
+                skip_ch = encoder_channels[-(i+1)]  # Fixed: was -(i+2), now -(i+1)
             else:
                 # Subsequent upsampling blocks
                 in_ch = decoder_channels[i-1]
-                skip_ch = encoder_channels[-(i+2)]
+                skip_ch = encoder_channels[-(i+1)]  # Fixed: was -(i+2), now -(i+1)
 
             out_ch = decoder_channels[i]
 
