@@ -199,15 +199,17 @@ class SwinRangeBranch(nn.Module):
         self._adapt_input_channels()
 
         # Feature projection layers to match RPVNet channel dimensions
+        # Note: SalsaNext mid_stage is at 1/16 scale, so we use swin_features[2] for bottleneck
         self.proj_layers = nn.ModuleList([
             nn.Conv2d(self.swin_channels[0], self.target_channels[0], 1),  # Stage 1 (stem)
-            nn.Conv2d(self.swin_channels[0], self.target_channels[1], 1),  # Skip 1
-            nn.Conv2d(self.swin_channels[1], self.target_channels[2], 1),  # Skip 2
-            nn.Conv2d(self.swin_channels[2], self.target_channels[3], 1),  # Skip 3
-            nn.Conv2d(self.swin_channels[3], self.target_channels[4], 1),  # Skip 4 / Bottleneck
+            nn.Conv2d(self.swin_channels[0], self.target_channels[1], 1),  # Skip 1 (1/4 scale)
+            nn.Conv2d(self.swin_channels[1], self.target_channels[2], 1),  # Skip 2 (1/8 scale)
+            nn.Conv2d(self.swin_channels[2], self.target_channels[3], 1),  # Skip 3 (1/16 scale)
+            nn.Conv2d(self.swin_channels[2], self.target_channels[4], 1),  # Bottleneck (1/16 scale, matches SalsaNext)
         ])
 
         # Decoder (UNet-style upsampling)
+        # Note: We use 3 scales from Swin (1/4, 1/8, 1/16) + bottleneck at 1/16
         self.decoder = SwinDecoder(
             encoder_channels=[self.target_channels[1], self.target_channels[2],
                             self.target_channels[3], self.target_channels[4]],
@@ -312,11 +314,11 @@ class SwinRangeBranch(nn.Module):
             swin_features.append(feat)
 
         # Project to target channel dimensions
-        feat0 = self.proj_layers[0](swin_features[0])  # Stem output
-        skip1 = self.proj_layers[1](swin_features[0])  # Skip connection 1
-        skip2 = self.proj_layers[2](swin_features[1])  # Skip connection 2
-        skip3 = self.proj_layers[3](swin_features[2])  # Skip connection 3
-        skip4 = self.proj_layers[4](swin_features[3])  # Skip connection 4 (bottleneck)
+        feat0 = self.proj_layers[0](swin_features[0])  # Stem output (1/4 scale)
+        skip1 = self.proj_layers[1](swin_features[0])  # Skip connection 1 (1/4 scale)
+        skip2 = self.proj_layers[2](swin_features[1])  # Skip connection 2 (1/8 scale)
+        skip3 = self.proj_layers[3](swin_features[2])  # Skip connection 3 (1/16 scale)
+        skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck (1/16 scale, matches SalsaNext mid_stage)
 
         # Decode with skip connections
         decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3, skip4])
