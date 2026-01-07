@@ -19,7 +19,8 @@ from torchsparse import SparseTensor
 
 from pcseg.model.segmentor.base_segmentors import BaseSegmentor
 from .utils import initial_voxelize, point_to_voxel, voxel_to_point
-from .swin_range_branch import SwinRangeBranchWrapper
+# Lazy import for SwinRangeBranchWrapper to avoid loading timm unnecessarily
+# from .swin_range_branch import SwinRangeBranchWrapper
 
 from pcseg.loss import Losses
 
@@ -596,6 +597,8 @@ class RPVNet(BaseSegmentor):
         range_branch_type = model_cfgs.get('RANGE_BRANCH', 'SalsaNext')
 
         if range_branch_type == 'SwinRangeBranch':
+            # Lazy import to avoid loading timm if not needed
+            from .swin_range_branch import SwinRangeBranchWrapper
             self.range_branch = SwinRangeBranchWrapper(model_cfgs=model_cfgs, input_channels=5)
         else:
             self.range_branch = SalsaNext(model_cfgs=model_cfgs, input_channels=5)
