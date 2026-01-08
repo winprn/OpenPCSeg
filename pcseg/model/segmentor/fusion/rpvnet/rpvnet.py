@@ -671,7 +671,7 @@ class RPVNet(BaseSegmentor):
         r_x2, r_s2 = self.range_branch.stage2(r_x1)
         r_x3, r_s3 = self.range_branch.stage3(r_x2)
         r_x4, r_s4 = self.range_branch.stage4(r_x3)
-        r_x4 = self.range_branch.mid_stage(r_x4)
+        # r_x4 = self.range_branch.mid_stage(r_x4)
         
         z1 = voxel_to_point(x4, z0)
         r_z1 = range_to_point(r_x4, range_pxpy, self.grid_sample_mode)
