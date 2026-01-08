@@ -43,7 +43,7 @@ def resample_grid_stacked(predictions, pxpy, grid_sample_mode='bilinear'):
         one_batch = one_batch.unsqueeze(0)
         one_pxpy = pxpy[bs_mask][:, 1:].unsqueeze(0).unsqueeze(0)
         
-        one_resampled = F.grid_sample(one_batch, one_pxpy, mode=grid_sample_mode)
+        one_resampled = F.grid_sample(one_batch, one_pxpy, mode=grid_sample_mode, align_corners=True)
         one_resampled = one_resampled.squeeze().transpose(0, 1)  # NxC
         resampled.append(one_resampled)
     return torch.cat(resampled, dim=0)
@@ -61,7 +61,7 @@ def resample_grid_stacked_forfusion(predictions, pxpy, cnt, grid_sample_mode='bi
       '''
     resampled = []
     one_pxpy = pxpy[:, 1:].unsqueeze(0).unsqueeze(0)
-    one_resampled = F.grid_sample(predictions, one_pxpy, mode=grid_sample_mode)
+    one_resampled = F.grid_sample(predictions, one_pxpy, mode=grid_sample_mode, align_corners=True)
     one_resampled = one_resampled.squeeze().transpose(0, 1)  # NxC
     resampled.append(one_resampled)
     return torch.cat(resampled, dim=0)
