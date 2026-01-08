@@ -96,11 +96,11 @@ class SwinDecoder(nn.Module):
             if i == 0:
                 # First upsampling from bottleneck
                 in_ch = encoder_channels[-1]
-                skip_ch = encoder_channels[-(i+2)] if i+2 <= len(encoder_channels) else encoder_channels[-1]
+                skip_ch = encoder_channels[-(i+1)]  # Use same scale for first block
             else:
                 # Subsequent upsampling blocks
                 in_ch = decoder_channels[i-1]
-                skip_ch = encoder_channels[-(i+2)] if i+2 <= len(encoder_channels) else encoder_channels[0]
+                skip_ch = encoder_channels[-(i+1)]  # Skip from progressively earlier stages
 
             out_ch = decoder_channels[i]
 
@@ -323,8 +323,9 @@ class SwinRangeBranch(nn.Module):
         skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck (1/16 scale, matches SalsaNext mid_stage)
 
         # Decode with skip connections
-        # Note: skip4 is the bottleneck input, skips list contains intermediate features only
-        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3])
+        # Note: Decoder expects 4 skips for 4 decoder blocks
+        # skip4 is used as both bottleneck input and final skip connection
+        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3, skip4])
 
         return {
             'stem': feat0,                           # Early features (for fusion 0)
