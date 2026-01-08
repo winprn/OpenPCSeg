@@ -325,7 +325,7 @@ class SwinRangeBranch(nn.Module):
         # Decode with skip connections
         # Note: Decoder expects 4 skips for 4 decoder blocks
         # skip4 is used as both bottleneck input and final skip connection
-        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3, skip4])
+        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3])
 
         return {
             'stem': feat0,                           # Early features (for fusion 0)
