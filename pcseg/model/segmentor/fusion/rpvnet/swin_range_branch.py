@@ -96,11 +96,11 @@ class SwinDecoder(nn.Module):
             if i == 0:
                 # First upsampling from bottleneck
                 in_ch = encoder_channels[-1]
-                skip_ch = encoder_channels[-(i+1)]  # Fixed: was -(i+2), now -(i+1)
+                skip_ch = encoder_channels[-(i+2)] if i+2 <= len(encoder_channels) else encoder_channels[-1]
             else:
                 # Subsequent upsampling blocks
                 in_ch = decoder_channels[i-1]
-                skip_ch = encoder_channels[-(i+1)]  # Fixed: was -(i+2), now -(i+1)
+                skip_ch = encoder_channels[-(i+2)] if i+2 <= len(encoder_channels) else encoder_channels[0]
 
             out_ch = decoder_channels[i]
 
@@ -209,17 +209,19 @@ class SwinRangeBranch(nn.Module):
         ])
 
         # Decoder (UNet-style upsampling)
+        # Match SalsaNext decoder channel pattern: cs[5:9] = [256, 128, 96, 96] scaled by cr
         # Note: We use 3 scales from Swin (1/4, 1/8, 1/16) + bottleneck at 1/16
+        decoder_channels_list = [int(self.cr * 256), int(self.cr * 128),
+                                int(self.cr * 96), int(self.cr * 96)]
         self.decoder = SwinDecoder(
             encoder_channels=[self.target_channels[1], self.target_channels[2],
                             self.target_channels[3], self.target_channels[4]],
-            decoder_channels=[self.target_channels[4], self.target_channels[3],
-                            self.target_channels[2], self.target_channels[1]],
+            decoder_channels=decoder_channels_list,
             dropout_rate=self.dropout_rate
         )
 
         # Output feature dimension (for RPVNet compatibility)
-        self.num_point_features = self.target_channels[1]  # Final decoder output
+        self.num_point_features = decoder_channels_list[-1]  # Final decoder output (up4)
 
     def _disable_strict_img_size(self):
         """
@@ -321,7 +323,8 @@ class SwinRangeBranch(nn.Module):
         skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck (1/16 scale, matches SalsaNext mid_stage)
 
         # Decode with skip connections
-        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3, skip4])
+        # Note: skip4 is the bottleneck input, skips list contains intermediate features only
+        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3])
 
         return {
             'stem': feat0,                           # Early features (for fusion 0)
@@ -360,8 +363,41 @@ class SwinRangeBranchWrapper(nn.Module):
         super().__init__()
 
         self.swin_branch = SwinRangeBranch(model_cfgs)
-        self.cache = None
+        self.swin_cache = None
         self.num_point_features = self.swin_branch.num_point_features
+
+        # Get channel dimensions for fusion layers
+        cr = model_cfgs.get('cr', 1.75)
+        target_channels = [int(cr * x) for x in [32, 32, 64, 128, 256]]
+        decoder_channels = [int(cr * 256), int(cr * 128), int(cr * 96), int(cr * 96)]
+
+        # Fusion layers to blend cached Swin features with RPVNet's fused inputs
+        # One fusion layer for each stage (stage1-4 + mid_stage = 5 total)
+        self.fusion_conv_stages = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(target_channels[i], target_channels[i], 3, padding=1),
+                nn.BatchNorm2d(target_channels[i]),
+                nn.ReLU(inplace=True)
+            )
+            for i in range(1, 5)  # stage1-4: indices 1-4
+        ])
+
+        # Add fusion layer for mid_stage (bottleneck)
+        self.fusion_conv_mid = nn.Sequential(
+            nn.Conv2d(target_channels[4], target_channels[4], 3, padding=1),
+            nn.BatchNorm2d(target_channels[4]),
+            nn.ReLU(inplace=True)
+        )
+
+        # Fusion layers for decoder (up1-4)
+        self.fusion_conv_decoder = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(decoder_channels[i], decoder_channels[i], 3, padding=1),
+                nn.BatchNorm2d(decoder_channels[i]),
+                nn.ReLU(inplace=True)
+            )
+            for i in range(len(decoder_channels))
+        ])
 
     def stem(self, x):
         """
@@ -373,105 +409,146 @@ class SwinRangeBranchWrapper(nn.Module):
         Returns:
             Stem features for first fusion point
         """
-        # Forward through entire Swin network ONCE
-        self.cache = self.swin_branch(x)
-        return self.cache['stem']
+        # Clear any stale cache from previous batch
+        self.swin_cache = None
+
+        # Forward through entire Swin network ONCE and cache all features
+        self.swin_cache = self.swin_branch(x)
+        return self.swin_cache['stem']
 
     def stage1(self, x):
         """
-        Return cached stage 1 features.
+        Accept and process fusion input.
 
         Args:
-            x: Ignored (output from point_to_range, but we use cached Swin features)
+            x: Fused input from RPVNet (point-to-range converted features) [B, C, H, W]
 
         Returns:
             (features, skip): Stage 1 output and skip connection
         """
-        if self.cache is None:
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage1()")
 
-        # Return projected first stage features
-        feat = self.cache['projected_features'][0]
-        skip = self.cache['skips'][0]
+        # Get cached Swin features
+        swin_feat = self.swin_cache['projected_features'][0]
+        skip = self.swin_cache['skips'][0]
 
-        return feat, skip
+        # Blend cached Swin features with RPVNet's fused input using residual connection
+        fused = swin_feat + self.fusion_conv_stages[0](x)
+
+        return fused, skip
 
     def stage2(self, x):
-        """Return cached stage 2 features."""
-        if self.cache is None:
+        """Accept and process fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage2()")
 
-        # Note: Swin features are at indices [0,1,2,3] for scales [1/4, 1/8, 1/16, 1/32]
-        # We map to RPVNet stages appropriately
-        feat = self.cache['projected_features'][1]
-        skip = self.cache['skips'][1]
+        # Get cached Swin features and blend with fused input
+        swin_feat = self.swin_cache['projected_features'][1]
+        skip = self.swin_cache['skips'][1]
 
-        return feat, skip
+        # Blend with RPVNet's fused input
+        fused = swin_feat + self.fusion_conv_stages[1](x)
+
+        return fused, skip
 
     def stage3(self, x):
-        """Return cached stage 3 features."""
-        if self.cache is None:
+        """Accept and process fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage3()")
 
-        feat = self.cache['projected_features'][2]
-        skip = self.cache['skips'][2]
+        # Get cached Swin features and blend with fused input
+        swin_feat = self.swin_cache['projected_features'][2]
+        skip = self.swin_cache['skips'][2]
 
-        return feat, skip
+        # Blend with RPVNet's fused input
+        fused = swin_feat + self.fusion_conv_stages[2](x)
+
+        return fused, skip
 
     def stage4(self, x):
-        """Return cached stage 4 features."""
-        if self.cache is None:
+        """Accept and process fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage4()")
 
-        feat = self.cache['projected_features'][3]
-        skip = self.cache['skips'][3]
+        # Get cached Swin features and blend with fused input
+        swin_feat = self.swin_cache['projected_features'][3]
+        skip = self.swin_cache['skips'][3]
 
-        return feat, skip
+        # Blend with RPVNet's fused input
+        fused = swin_feat + self.fusion_conv_stages[3](x)
+
+        return fused, skip
 
     def mid_stage(self, x):
         """
-        Return cached bottleneck features.
+        Accept and process bottleneck fusion input.
 
         Note: In SalsaNext, mid_stage processes stage4 output.
-              Here we return the bottleneck directly from cache.
+              Here we blend the bottleneck with fused input.
         """
-        if self.cache is None:
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before mid_stage()")
 
-        return self.cache['bottleneck']
+        # Get cached bottleneck features
+        bottleneck = self.swin_cache['bottleneck']
+
+        # Blend with RPVNet's fused input
+        fused = bottleneck + self.fusion_conv_mid(x)
+
+        return fused
 
     def up1(self, x, skip):
         """
-        Return cached decoder up1 output.
+        Accept and process decoder fusion input.
 
         Args:
-            x, skip: Ignored (we return cached decoder features)
+            x: Fused input from RPVNet (point-to-range converted features) [B, C, H, W]
+            skip: Skip connection (ignored, we use cached skips from encoder)
 
         Returns:
-            Upsampled features from decoder
+            Upsampled and fused features
         """
-        if self.cache is None:
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up1()")
 
-        return self.cache['decoder_outputs'][0]
+        # Get cached decoder output
+        swin_decoder = self.swin_cache['decoder_outputs'][0]
+
+        # Blend with RPVNet's fused input
+        fused = swin_decoder + self.fusion_conv_decoder[0](x)
+
+        return fused
 
     def up2(self, x, skip):
-        """Return cached decoder up2 output."""
-        if self.cache is None:
+        """Accept and process decoder fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up2()")
 
-        return self.cache['decoder_outputs'][1]
+        # Get cached decoder output and blend with fused input
+        swin_decoder = self.swin_cache['decoder_outputs'][1]
+        fused = swin_decoder + self.fusion_conv_decoder[1](x)
+
+        return fused
 
     def up3(self, x, skip):
-        """Return cached decoder up3 output."""
-        if self.cache is None:
+        """Accept and process decoder fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up3()")
 
-        return self.cache['decoder_outputs'][2]
+        # Get cached decoder output and blend with fused input
+        swin_decoder = self.swin_cache['decoder_outputs'][2]
+        fused = swin_decoder + self.fusion_conv_decoder[2](x)
+
+        return fused
 
     def up4(self, x, skip):
-        """Return cached decoder up4 output."""
-        if self.cache is None:
+        """Accept and process decoder fusion input."""
+        if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up4()")
 
-        return self.cache['decoder_outputs'][3]
+        # Get cached decoder output and blend with fused input
+        swin_decoder = self.swin_cache['decoder_outputs'][3]
+        fused = swin_decoder + self.fusion_conv_decoder[3](x)
+
+        return fused
