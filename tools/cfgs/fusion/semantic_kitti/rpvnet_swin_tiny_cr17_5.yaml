@@ -3,7 +3,7 @@ MODALITY: 'fusion'
 DATA:
     DATASET: 'semantickitti'  # choices: ['nuscenes', 'semantickitti', 'scribblekitti']
     PETRELOSS_CONFIG: None
-    DATA_PATH: 'data_root/SemanticKITTI/sequences/'
+    DATA_PATH: '/raid/nnthao01/AutonomousDriving/dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences'
     VOXEL_SIZE: 0.05
     AUGMENT: 'GlobalAugment_LP'  # choices: ['GlobalAugment', 'GlobalAugment_LP']
     NUM_POINTS: 1000000
