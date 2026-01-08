@@ -223,6 +223,31 @@ class SwinRangeBranch(nn.Module):
         # Output feature dimension (for RPVNet compatibility)
         self.num_point_features = decoder_channels_list[-1]  # Final decoder output (up4)
 
+        # Upsample layers to match SalsaNext's progressive downsampling scales
+        # SalsaNext: stem(1x) -> stage1(1/2) -> stage2(1/4) -> stage3(1/8) -> stage4(1/16)
+        # Swin: all features start at [1/4, 1/8, 1/16, 1/32] scales
+        # We need to upsample to match SalsaNext's expected output scales
+
+        # Stem: upsample from 1/4 to 1x (4x)
+        self.stem_upsample = nn.Sequential(
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=False),
+            nn.Conv2d(self.target_channels[0], self.target_channels[0], 3, padding=1),
+            nn.BatchNorm2d(self.target_channels[0]),
+            nn.ReLU(inplace=True)
+        )
+
+        # Stage1: upsample from 1/4 to 1/2 (2x)
+        self.stage1_upsample = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(self.target_channels[1], self.target_channels[1], 3, padding=1),
+            nn.BatchNorm2d(self.target_channels[1]),
+            nn.ReLU(inplace=True)
+        )
+
+        # Stage2: keep at 1/4 (no upsample needed)
+        # Stage3: keep at 1/8 (no upsample needed)
+        # Stage4: keep at 1/16 (no upsample needed)
+
     def _disable_strict_img_size(self):
         """
         Disable strict image size checking in patch embedding layer.
@@ -316,11 +341,15 @@ class SwinRangeBranch(nn.Module):
             swin_features.append(feat)
 
         # Project to target channel dimensions
-        feat0 = self.proj_layers[0](swin_features[0])  # Stem output (1/4 scale)
-        skip1 = self.proj_layers[1](swin_features[0])  # Skip connection 1 (1/4 scale)
-        skip2 = self.proj_layers[2](swin_features[1])  # Skip connection 2 (1/8 scale)
-        skip3 = self.proj_layers[3](swin_features[2])  # Skip connection 3 (1/16 scale)
-        skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck (1/16 scale, matches SalsaNext mid_stage)
+        feat0_quarter = self.proj_layers[0](swin_features[0])  # Features at 1/4 scale
+        feat0 = self.stem_upsample(feat0_quarter)  # Upsample to full resolution for stem
+
+        # Stage outputs - match SalsaNext scales
+        skip1_quarter = self.proj_layers[1](swin_features[0])  # 1/4 scale
+        skip1 = self.stage1_upsample(skip1_quarter)  # Upsample to 1/2 for stage1
+        skip2 = self.proj_layers[2](swin_features[1])  # Keep at 1/8 scale for stage2 (will downsample to 1/4 in RPVNet)
+        skip3 = self.proj_layers[3](swin_features[2])  # Keep at 1/16 scale for stage3 (will downsample to 1/8 in RPVNet)
+        skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck at 1/16 scale
 
         # Decode with skip connections
         # Note: Decoder expects 4 skips for 4 decoder blocks
@@ -373,14 +402,27 @@ class SwinRangeBranchWrapper(nn.Module):
         decoder_channels = [int(cr * 256), int(cr * 128), int(cr * 96), int(cr * 96)]
 
         # Fusion layers to blend cached Swin features with RPVNet's fused inputs
-        # One fusion layer for each stage (stage1-4 + mid_stage = 5 total)
+        # These need to downsample the fusion input to match Swin feature scales
+        # stage1: full res -> 1/2 (stride 2)
+        # stage2: 1/2 -> 1/4 (stride 2) - but point_to_range reconstructs at full h,w each time
+        # Actually, point_to_range always reconstructs at (h, w) specified by RPVNet
+        # So we need to handle the downsampling in the fusion layers
+
+        # Stage1 fusion: input at full res, output at 1/2 (downsample 2x)
+        self.fusion_conv_stage1 = nn.Sequential(
+            nn.Conv2d(target_channels[1], target_channels[1], 3, stride=2, padding=1),
+            nn.BatchNorm2d(target_channels[1]),
+            nn.ReLU(inplace=True)
+        )
+
+        # Stage2-4 fusion: inputs match Swin scales (no stride needed)
         self.fusion_conv_stages = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(target_channels[i], target_channels[i], 3, padding=1),
                 nn.BatchNorm2d(target_channels[i]),
                 nn.ReLU(inplace=True)
             )
-            for i in range(1, 5)  # stage1-4: indices 1-4
+            for i in range(2, 5)  # stage2-4: indices 2-4
         ])
 
         # Add fusion layer for mid_stage (bottleneck)
@@ -423,19 +465,20 @@ class SwinRangeBranchWrapper(nn.Module):
 
         Args:
             x: Fused input from RPVNet (point-to-range converted features) [B, C, H, W]
+               at full resolution
 
         Returns:
-            (features, skip): Stage 1 output and skip connection
+            (features, skip): Stage 1 output and skip connection at 1/2 resolution
         """
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage1()")
 
-        # Get cached Swin features
+        # Get cached Swin features (at 1/2 scale after upsampling)
         swin_feat = self.swin_cache['projected_features'][0]
         skip = self.swin_cache['skips'][0]
 
-        # Blend cached Swin features with RPVNet's fused input using residual connection
-        fused = swin_feat + self.fusion_conv_stages[0](x)
+        # Downsample fusion input from full res to 1/2 and blend
+        fused = swin_feat + self.fusion_conv_stage1(x)
 
         return fused, skip
 
@@ -448,8 +491,8 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][1]
         skip = self.swin_cache['skips'][1]
 
-        # Blend with RPVNet's fused input
-        fused = swin_feat + self.fusion_conv_stages[1](x)
+        # Blend with RPVNet's fused input (fusion_conv_stages[0] = stage2)
+        fused = swin_feat + self.fusion_conv_stages[0](x)
 
         return fused, skip
 
@@ -462,8 +505,8 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][2]
         skip = self.swin_cache['skips'][2]
 
-        # Blend with RPVNet's fused input
-        fused = swin_feat + self.fusion_conv_stages[2](x)
+        # Blend with RPVNet's fused input (fusion_conv_stages[1] = stage3)
+        fused = swin_feat + self.fusion_conv_stages[1](x)
 
         return fused, skip
 
@@ -476,8 +519,8 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][3]
         skip = self.swin_cache['skips'][3]
 
-        # Blend with RPVNet's fused input
-        fused = swin_feat + self.fusion_conv_stages[3](x)
+        # Blend with RPVNet's fused input (fusion_conv_stages[2] = stage4)
+        fused = swin_feat + self.fusion_conv_stages[2](x)
 
         return fused, skip
 
