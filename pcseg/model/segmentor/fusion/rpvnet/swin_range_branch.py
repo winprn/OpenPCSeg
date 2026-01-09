@@ -485,12 +485,17 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage1()")
 
-        # Get cached Swin features (at 1/2 scale after upsampling)
-        swin_feat = self.swin_cache['projected_features'][0]
-        skip = self.swin_cache['skips'][0]
+        # Clone cached Swin features to avoid modifying the cache
+        swin_feat = self.swin_cache['projected_features'][0].clone()
+        skip = self.swin_cache['skips'][0].clone()
 
         # Downsample fusion input from full res to 1/2 and blend
-        fused = swin_feat + self.fusion_conv_stage1(x)
+        conv_out = self.fusion_conv_stage1(x)
+        if swin_feat.shape[2:] != conv_out.shape[2:]:
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_feat + conv_out
 
         return fused, skip
 
@@ -499,9 +504,9 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage2()")
 
-        # Get cached Swin features and blend with fused input
-        swin_feat = self.swin_cache['projected_features'][1]
-        skip = self.swin_cache['skips'][1]
+        # Clone cached Swin features to avoid modifying the cache
+        swin_feat = self.swin_cache['projected_features'][1].clone()
+        skip = self.swin_cache['skips'][1].clone()
 
         # Interpolate Swin features to match input spatial dimensions
         conv_out = self.fusion_conv_stages[0](x)
@@ -518,9 +523,9 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage3()")
 
-        # Get cached Swin features and blend with fused input
-        swin_feat = self.swin_cache['projected_features'][2]
-        skip = self.swin_cache['skips'][2]
+        # Clone cached Swin features to avoid modifying the cache
+        swin_feat = self.swin_cache['projected_features'][2].clone()
+        skip = self.swin_cache['skips'][2].clone()
 
         # Interpolate Swin features to match input spatial dimensions
         conv_out = self.fusion_conv_stages[1](x)
@@ -537,9 +542,9 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage4()")
 
-        # Get cached Swin features and blend with fused input
-        swin_feat = self.swin_cache['projected_features'][3]
-        skip = self.swin_cache['skips'][3]
+        # Clone cached Swin features to avoid modifying the cache
+        swin_feat = self.swin_cache['projected_features'][3].clone()
+        skip = self.swin_cache['skips'][3].clone()
 
         # Interpolate Swin features to match input spatial dimensions
         conv_out = self.fusion_conv_stages[2](x)
@@ -561,8 +566,8 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before mid_stage()")
 
-        # Get cached bottleneck features
-        bottleneck = self.swin_cache['bottleneck']
+        # Clone cached bottleneck features
+        bottleneck = self.swin_cache['bottleneck'].clone()
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_mid(x)
@@ -587,8 +592,8 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up1()")
 
-        # Get cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][0]
+        # Clone cached decoder output
+        swin_decoder = self.swin_cache['decoder_outputs'][0].clone()
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[0](x)
@@ -604,8 +609,8 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up2()")
 
-        # Get cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][1]
+        # Clone cached decoder output
+        swin_decoder = self.swin_cache['decoder_outputs'][1].clone()
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[1](x)
@@ -621,8 +626,8 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up3()")
 
-        # Get cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][2]
+        # Clone cached decoder output
+        swin_decoder = self.swin_cache['decoder_outputs'][2].clone()
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[2](x)
@@ -638,8 +643,8 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up4()")
 
-        # Get cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][3]
+        # Clone cached decoder output
+        swin_decoder = self.swin_cache['decoder_outputs'][3].clone()
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[3](x)
