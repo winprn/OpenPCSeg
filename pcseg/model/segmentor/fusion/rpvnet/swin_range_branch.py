@@ -418,7 +418,7 @@ class SwinRangeBranchWrapper(nn.Module):
         # Stage2-4 fusion: inputs match Swin scales (no stride needed)
         self.fusion_conv_stages = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(target_channels[i], target_channels[i], 3, padding=1),
+                nn.Conv2d(target_channels[i-1], target_channels[i], 3, padding=1),
                 nn.BatchNorm2d(target_channels[i]),
                 nn.ReLU(inplace=True)
             )
