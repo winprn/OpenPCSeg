@@ -43,4 +43,4 @@ OPTIM:
     WARMUP_EPOCH: 2              # Longer warmup for stability
 
     # Two-stage training strategy
-    FREEZE_RANGE_EPOCHS: 10      # Freeze Swin encoder for first 10 epochs (0 = no freeze)
+    FREEZE_RANGE_EPOCHS: 0      # Freeze Swin encoder for first 10 epochs (0 = no freeze)
