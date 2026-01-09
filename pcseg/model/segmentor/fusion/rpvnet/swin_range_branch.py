@@ -433,9 +433,21 @@ class SwinRangeBranchWrapper(nn.Module):
         )
 
         # Fusion layers for decoder (up1-4)
+        # Define input channels for each decoder stage based on RPVNet's data flow:
+        # up1: input from point_to_range(z1.F) = target_channels[4]
+        # up2: input from up1 output = decoder_channels[0]
+        # up3: input from point_to_range(z2.F) = voxel up2 output channels = int(cr * 128)
+        # up4: input from up3 output = decoder_channels[2]
+        voxel_up2_channels = int(cr * 128)
+        decoder_input_channels = [
+            target_channels[4],      # up1: from z1.F
+            decoder_channels[0],     # up2: from up1 output
+            voxel_up2_channels,      # up3: from z2.F via point_to_range
+            decoder_channels[2],     # up4: from up3 output
+        ]
         self.fusion_conv_decoder = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(decoder_channels[i], decoder_channels[i], 3, padding=1),
+                nn.Conv2d(decoder_input_channels[i], decoder_channels[i], 3, padding=1),
                 nn.BatchNorm2d(decoder_channels[i]),
                 nn.ReLU(inplace=True)
             )
