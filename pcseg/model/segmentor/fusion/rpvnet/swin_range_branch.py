@@ -340,29 +340,28 @@ class SwinRangeBranch(nn.Module):
                     )
             swin_features.append(feat)
 
-        # Project to target channel dimensions
-        feat0_quarter = self.proj_layers[0](swin_features[0])  # Features at 1/4 scale
-        feat0 = self.stem_upsample(feat0_quarter)  # Upsample to full resolution for stem
+        # Project to target channel dimensions (ensure contiguous for downstream ops)
+        feat0_quarter = self.proj_layers[0](swin_features[0])
+        feat0 = self.stem_upsample(feat0_quarter).contiguous()
 
         # Stage outputs - match SalsaNext scales
-        skip1_quarter = self.proj_layers[1](swin_features[0])  # 1/4 scale
-        skip1 = self.stage1_upsample(skip1_quarter)  # Upsample to 1/2 for stage1
-        skip2 = self.proj_layers[2](swin_features[1])  # Keep at 1/8 scale for stage2 (will downsample to 1/4 in RPVNet)
-        skip3 = self.proj_layers[3](swin_features[2])  # Keep at 1/16 scale for stage3 (will downsample to 1/8 in RPVNet)
-        skip4 = self.proj_layers[4](swin_features[2])  # Bottleneck at 1/16 scale
+        skip1_quarter = self.proj_layers[1](swin_features[0])
+        skip1 = self.stage1_upsample(skip1_quarter).contiguous()
+        skip2 = self.proj_layers[2](swin_features[1]).contiguous()
+        skip3 = self.proj_layers[3](swin_features[2]).contiguous()
+        skip4 = self.proj_layers[4](swin_features[2]).contiguous()
 
         # Decode with skip connections
-        # Note: Decoder expects 4 skips for 4 decoder blocks
-        # skip4 is used as both bottleneck input and final skip connection
-        decoder_outputs = self.decoder(skip4, [skip1, skip2, skip3, skip4])
+        decoder_outputs_raw = self.decoder(skip4, [skip1, skip2, skip3, skip4])
+        decoder_outputs = [d.contiguous() for d in decoder_outputs_raw]
 
         return {
-            'stem': feat0,                           # Early features (for fusion 0)
-            'encoder_features': swin_features,       # Raw Swin features
-            'projected_features': [skip1, skip2, skip3, skip4],  # Stage outputs
-            'skips': [skip1, skip2, skip3, skip4],  # Skip connections
-            'bottleneck': skip4,                     # Bottleneck (for fusion 1)
-            'decoder_outputs': decoder_outputs,      # [up1, up2, up3, up4]
+            'stem': feat0,
+            'encoder_features': swin_features,
+            'projected_features': [skip1, skip2, skip3, skip4],
+            'skips': [skip1, skip2, skip3, skip4],
+            'bottleneck': skip4,
+            'decoder_outputs': decoder_outputs,
         }
 
 
@@ -486,17 +485,17 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage1()")
 
-        # Clone cached Swin features to avoid modifying the cache
-        swin_feat = self.swin_cache['projected_features'][0].clone()
-        skip = self.swin_cache['skips'][0].clone()
+        # Get cached Swin features (already contiguous from forward)
+        swin_feat = self.swin_cache['projected_features'][0]
+        skip = self.swin_cache['skips'][0]
 
         # Downsample fusion input from full res to 1/2 and blend
         conv_out = self.fusion_conv_stage1(x)
         if swin_feat.shape[2:] != conv_out.shape[2:]:
-            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
-            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_feat + conv_out
+        fused = (swin_feat + conv_out).contiguous()
 
         return fused, skip
 
@@ -505,17 +504,17 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage2()")
 
-        # Clone cached Swin features to avoid modifying the cache
-        swin_feat = self.swin_cache['projected_features'][1].clone()
-        skip = self.swin_cache['skips'][1].clone()
+        # Get cached Swin features (already contiguous from forward)
+        swin_feat = self.swin_cache['projected_features'][1]
+        skip = self.swin_cache['skips'][1]
 
-        # Interpolate Swin features to match input spatial dimensions
+        # Interpolate Swin features to match conv output spatial dimensions
         conv_out = self.fusion_conv_stages[0](x)
         if swin_feat.shape[2:] != conv_out.shape[2:]:
-            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
-            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_feat + conv_out
+        fused = (swin_feat + conv_out).contiguous()
 
         return fused, skip
 
@@ -524,17 +523,17 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage3()")
 
-        # Clone cached Swin features to avoid modifying the cache
-        swin_feat = self.swin_cache['projected_features'][2].clone()
-        skip = self.swin_cache['skips'][2].clone()
+        # Get cached Swin features (already contiguous from forward)
+        swin_feat = self.swin_cache['projected_features'][2]
+        skip = self.swin_cache['skips'][2]
 
-        # Interpolate Swin features to match input spatial dimensions
+        # Interpolate Swin features to match conv output spatial dimensions
         conv_out = self.fusion_conv_stages[1](x)
         if swin_feat.shape[2:] != conv_out.shape[2:]:
-            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
-            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_feat + conv_out
+        fused = (swin_feat + conv_out).contiguous()
 
         return fused, skip
 
@@ -543,17 +542,17 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before stage4()")
 
-        # Clone cached Swin features to avoid modifying the cache
-        swin_feat = self.swin_cache['projected_features'][3].clone()
-        skip = self.swin_cache['skips'][3].clone()
+        # Get cached Swin features (already contiguous from forward)
+        swin_feat = self.swin_cache['projected_features'][3]
+        skip = self.swin_cache['skips'][3]
 
-        # Interpolate Swin features to match input spatial dimensions
+        # Interpolate Swin features to match conv output spatial dimensions
         conv_out = self.fusion_conv_stages[2](x)
         if swin_feat.shape[2:] != conv_out.shape[2:]:
-            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
-            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_feat + conv_out
+        fused = (swin_feat + conv_out).contiguous()
 
         return fused, skip
 
@@ -567,15 +566,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before mid_stage()")
 
-        # Clone cached bottleneck features
-        bottleneck = self.swin_cache['bottleneck'].clone()
+        # Get cached bottleneck features (already contiguous from forward)
+        bottleneck = self.swin_cache['bottleneck']
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_mid(x)
         if bottleneck.shape[2:] != conv_out.shape[2:]:
-            bottleneck = F.interpolate(bottleneck, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            bottleneck = F.interpolate(bottleneck, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = bottleneck + conv_out
+        fused = (bottleneck + conv_out).contiguous()
 
         return fused
 
@@ -593,15 +592,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up1()")
 
-        # Clone cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][0].clone()
+        # Get cached decoder output (already contiguous from forward)
+        swin_decoder = self.swin_cache['decoder_outputs'][0]
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[0](x)
         if swin_decoder.shape[2:] != conv_out.shape[2:]:
-            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_decoder + conv_out
+        fused = (swin_decoder + conv_out).contiguous()
 
         return fused
 
@@ -610,15 +609,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up2()")
 
-        # Clone cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][1].clone()
+        # Get cached decoder output (already contiguous from forward)
+        swin_decoder = self.swin_cache['decoder_outputs'][1]
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[1](x)
         if swin_decoder.shape[2:] != conv_out.shape[2:]:
-            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_decoder + conv_out
+        fused = (swin_decoder + conv_out).contiguous()
 
         return fused
 
@@ -627,15 +626,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up3()")
 
-        # Clone cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][2].clone()
+        # Get cached decoder output (already contiguous from forward)
+        swin_decoder = self.swin_cache['decoder_outputs'][2]
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[2](x)
         if swin_decoder.shape[2:] != conv_out.shape[2:]:
-            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_decoder + conv_out
+        fused = (swin_decoder + conv_out).contiguous()
 
         return fused
 
@@ -644,14 +643,14 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up4()")
 
-        # Clone cached decoder output
-        swin_decoder = self.swin_cache['decoder_outputs'][3].clone()
+        # Get cached decoder output (already contiguous from forward)
+        swin_decoder = self.swin_cache['decoder_outputs'][3]
 
         # Interpolate to match spatial dimensions
         conv_out = self.fusion_conv_decoder[3](x)
         if swin_decoder.shape[2:] != conv_out.shape[2:]:
-            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False).contiguous()
 
-        fused = swin_decoder + conv_out
+        fused = (swin_decoder + conv_out).contiguous()
 
         return fused
