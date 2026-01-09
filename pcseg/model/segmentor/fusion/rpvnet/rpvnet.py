@@ -570,25 +570,27 @@ class RPVNet(BaseSegmentor):
         if self.multi_scale == 'concat':
             self.classifier = nn.Sequential(nn.Linear((cs[4] + cs[6] + cs[8]) * self.block.expansion, self.num_class))
 
+        # Note: point_transforms operates on regular Tensors (z.F), not SparseTensors
+        # Use nn.BatchNorm1d instead of custom BatchNorm which expects SparseTensor
         self.point_transforms = nn.ModuleList([
             nn.Sequential(
                nn.Linear(self.in_feature_dim, cs[0]),
-               nn.SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
+               nn.SyncBatchNorm(cs[0]) if if_dist else nn.BatchNorm1d(cs[0]),
                nn.ReLU(True),
            ),
             nn.Sequential(
                 nn.Linear(cs[0], cs[4] * self.block.expansion),
-                nn.SyncBatchNorm(cs[4] * self.block.expansion) if if_dist else BatchNorm(cs[4] * self.block.expansion),
+                nn.SyncBatchNorm(cs[4] * self.block.expansion) if if_dist else nn.BatchNorm1d(cs[4] * self.block.expansion),
                 nn.ReLU(True),
             ),
             nn.Sequential(
                 nn.Linear(cs[4] * self.block.expansion, cs[6] * self.block.expansion),
-                nn.SyncBatchNorm(cs[6] * self.block.expansion) if if_dist else BatchNorm(cs[6] * self.block.expansion),
+                nn.SyncBatchNorm(cs[6] * self.block.expansion) if if_dist else nn.BatchNorm1d(cs[6] * self.block.expansion),
                 nn.ReLU(True),
             ),
             nn.Sequential(
                 nn.Linear(cs[6] * self.block.expansion, cs[8] * self.block.expansion),
-                nn.SyncBatchNorm(cs[8] * self.block.expansion) if if_dist else BatchNorm(cs[8] * self.block.expansion),
+                nn.SyncBatchNorm(cs[8] * self.block.expansion) if if_dist else nn.BatchNorm1d(cs[8] * self.block.expansion),
                 nn.ReLU(True),
             )
         ])
