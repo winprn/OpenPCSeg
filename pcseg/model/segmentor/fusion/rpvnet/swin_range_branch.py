@@ -503,8 +503,13 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][1]
         skip = self.swin_cache['skips'][1]
 
-        # Blend with RPVNet's fused input (fusion_conv_stages[0] = stage2)
-        fused = swin_feat + self.fusion_conv_stages[0](x)
+        # Interpolate Swin features to match input spatial dimensions
+        conv_out = self.fusion_conv_stages[0](x)
+        if swin_feat.shape[2:] != conv_out.shape[2:]:
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_feat + conv_out
 
         return fused, skip
 
@@ -517,8 +522,13 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][2]
         skip = self.swin_cache['skips'][2]
 
-        # Blend with RPVNet's fused input (fusion_conv_stages[1] = stage3)
-        fused = swin_feat + self.fusion_conv_stages[1](x)
+        # Interpolate Swin features to match input spatial dimensions
+        conv_out = self.fusion_conv_stages[1](x)
+        if swin_feat.shape[2:] != conv_out.shape[2:]:
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_feat + conv_out
 
         return fused, skip
 
@@ -531,8 +541,13 @@ class SwinRangeBranchWrapper(nn.Module):
         swin_feat = self.swin_cache['projected_features'][3]
         skip = self.swin_cache['skips'][3]
 
-        # Blend with RPVNet's fused input (fusion_conv_stages[2] = stage4)
-        fused = swin_feat + self.fusion_conv_stages[2](x)
+        # Interpolate Swin features to match input spatial dimensions
+        conv_out = self.fusion_conv_stages[2](x)
+        if swin_feat.shape[2:] != conv_out.shape[2:]:
+            swin_feat = F.interpolate(swin_feat, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+            skip = F.interpolate(skip, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_feat + conv_out
 
         return fused, skip
 
@@ -549,8 +564,12 @@ class SwinRangeBranchWrapper(nn.Module):
         # Get cached bottleneck features
         bottleneck = self.swin_cache['bottleneck']
 
-        # Blend with RPVNet's fused input
-        fused = bottleneck + self.fusion_conv_mid(x)
+        # Interpolate to match spatial dimensions
+        conv_out = self.fusion_conv_mid(x)
+        if bottleneck.shape[2:] != conv_out.shape[2:]:
+            bottleneck = F.interpolate(bottleneck, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = bottleneck + conv_out
 
         return fused
 
@@ -571,8 +590,12 @@ class SwinRangeBranchWrapper(nn.Module):
         # Get cached decoder output
         swin_decoder = self.swin_cache['decoder_outputs'][0]
 
-        # Blend with RPVNet's fused input
-        fused = swin_decoder + self.fusion_conv_decoder[0](x)
+        # Interpolate to match spatial dimensions
+        conv_out = self.fusion_conv_decoder[0](x)
+        if swin_decoder.shape[2:] != conv_out.shape[2:]:
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_decoder + conv_out
 
         return fused
 
@@ -581,9 +604,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up2()")
 
-        # Get cached decoder output and blend with fused input
+        # Get cached decoder output
         swin_decoder = self.swin_cache['decoder_outputs'][1]
-        fused = swin_decoder + self.fusion_conv_decoder[1](x)
+
+        # Interpolate to match spatial dimensions
+        conv_out = self.fusion_conv_decoder[1](x)
+        if swin_decoder.shape[2:] != conv_out.shape[2:]:
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_decoder + conv_out
 
         return fused
 
@@ -592,9 +621,15 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up3()")
 
-        # Get cached decoder output and blend with fused input
+        # Get cached decoder output
         swin_decoder = self.swin_cache['decoder_outputs'][2]
-        fused = swin_decoder + self.fusion_conv_decoder[2](x)
+
+        # Interpolate to match spatial dimensions
+        conv_out = self.fusion_conv_decoder[2](x)
+        if swin_decoder.shape[2:] != conv_out.shape[2:]:
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_decoder + conv_out
 
         return fused
 
@@ -603,8 +638,14 @@ class SwinRangeBranchWrapper(nn.Module):
         if self.swin_cache is None:
             raise RuntimeError("Must call stem() before up4()")
 
-        # Get cached decoder output and blend with fused input
+        # Get cached decoder output
         swin_decoder = self.swin_cache['decoder_outputs'][3]
-        fused = swin_decoder + self.fusion_conv_decoder[3](x)
+
+        # Interpolate to match spatial dimensions
+        conv_out = self.fusion_conv_decoder[3](x)
+        if swin_decoder.shape[2:] != conv_out.shape[2:]:
+            swin_decoder = F.interpolate(swin_decoder, size=conv_out.shape[2:], mode='bilinear', align_corners=False)
+
+        fused = swin_decoder + conv_out
 
         return fused
