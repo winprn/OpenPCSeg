@@ -29,7 +29,7 @@ MODEL:
 
     DROPOUT_P: 0.3               # Higher dropout for transformer (regularization)
     LABEL_SMOOTHING: 0.0
-    IF_DIST: True                # True: multi-gpus, False: single gpu
+    IF_DIST: False                # True: multi-gpus, False: single gpu
 
 OPTIM:
     BATCH_SIZE_PER_GPU: 8        # Reduced from 16 due to Swin memory usage
