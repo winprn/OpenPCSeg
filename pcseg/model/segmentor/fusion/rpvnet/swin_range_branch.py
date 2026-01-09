@@ -415,10 +415,11 @@ class SwinRangeBranchWrapper(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-        # Stage2-4 fusion: inputs match Swin scales (no stride needed)
+        # Stage2-4 fusion: add stride=2 to progressively downsample like SalsaNext
+        # This produces outputs at: 1/4, 1/8, 1/16 scales
         self.fusion_conv_stages = nn.ModuleList([
             nn.Sequential(
-                nn.Conv2d(target_channels[i-1], target_channels[i], 3, padding=1),
+                nn.Conv2d(target_channels[i-1], target_channels[i], 3, stride=2, padding=1),
                 nn.BatchNorm2d(target_channels[i]),
                 nn.ReLU(inplace=True)
             )
