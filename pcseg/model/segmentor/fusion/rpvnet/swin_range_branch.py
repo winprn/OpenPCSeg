@@ -19,7 +19,7 @@ except ImportError:
     raise ImportError("timm library is required. Install with: pip install timm>=0.9.0")
 
 
-__all__ = ['SwinRangeBranch', 'SwinRangeBranchWrapper']
+__all__ = ['SwinRangeBranch', 'SwinRangeBranchWrapper', 'SimpleSwinRangeBranch']
 
 
 class DecoderBlock(nn.Module):
@@ -596,3 +596,129 @@ class SwinRangeBranchWrapper(nn.Module):
         fused = swin_decoder + self.fusion_conv_decoder[3](x)
 
         return fused
+
+
+class SimpleSwinRangeBranch(nn.Module):
+    """
+    Simplified Swin Transformer range branch with single forward pass.
+
+    This is a simplified version designed for late fusion architecture.
+    Unlike SwinRangeBranchWrapper which caches features for 4-stage fusion,
+    this module performs a single forward pass and outputs a single feature tensor.
+
+    Key improvements:
+    - Single forward pass (no caching)
+    - Single output tensor (no multi-scale)
+    - Simple API (no stem/stage1-4/up1-4 methods)
+    - Clean tensor flow (no fusion layers inside branch)
+
+    Args:
+        model_cfgs: Model configuration dictionary
+        input_channels: Number of input channels (default: 5 for range images)
+    """
+
+    def __init__(self, model_cfgs, input_channels=5):
+        super().__init__()
+
+        # Configuration
+        swin_variant = model_cfgs.get('SWIN_VARIANT', 'swin_tiny_patch4_window7_224')
+        pretrained = model_cfgs.get('SWIN_PRETRAINED', True)
+        output_scale = model_cfgs.get('SWIN_OUTPUT_SCALE', 4)  # 1/4 resolution
+        output_channels = model_cfgs.get('SWIN_OUTPUT_CHANNELS', 256)
+
+        # Input projection: 5 channels → 3 channels (for pretrained Swin)
+        # Range images have 5 channels: (inverse_depth, reflectivity, x, y, z)
+        # Pretrained Swin expects 3-channel RGB images
+        self.input_proj = nn.Conv2d(input_channels, 3, kernel_size=1, bias=True)
+
+        # Initialize input projection to approximate RGB conversion
+        # This helps with transfer learning from ImageNet
+        with torch.no_grad():
+            # Use first 3 channels with some weighting
+            self.input_proj.weight.zero_()
+            self.input_proj.weight[0, 0] = 1.0  # Red ← inverse_depth
+            self.input_proj.weight[1, 1] = 1.0  # Green ← reflectivity
+            self.input_proj.weight[2, 2:5].fill_(1.0/3.0)  # Blue ← mean(x,y,z)
+            self.input_proj.bias.zero_()
+
+        # Swin encoder (pretrained on ImageNet)
+        self.backbone = timm.create_model(
+            swin_variant,
+            pretrained=pretrained,
+            features_only=True,
+            out_indices=[0, 1, 2, 3]  # 4 scales: 1/4, 1/8, 1/16, 1/32
+        )
+
+        # Get channel dimensions from Swin
+        # Example for swin_tiny: [96, 192, 384, 768] at scales [1/4, 1/8, 1/16, 1/32]
+        swin_channels = self.backbone.feature_info.channels()
+
+        # Select feature scale based on output_scale
+        scale_to_idx = {4: 0, 8: 1, 16: 2, 32: 3}
+        if output_scale not in scale_to_idx:
+            raise ValueError(f"output_scale must be one of {list(scale_to_idx.keys())}, got {output_scale}")
+
+        self.feature_idx = scale_to_idx[output_scale]
+        swin_ch = swin_channels[self.feature_idx]
+
+        # Optional: lightweight decoder for higher resolution
+        # For now, use direct feature extraction at the selected scale
+        # Can add decoder later if needed for higher resolution output
+        self.decoder = None
+
+        # Output projection to target channels
+        # Projects from Swin feature dimension to desired output dimension
+        self.output_proj = nn.Conv2d(swin_ch, output_channels, kernel_size=1, bias=True)
+
+        # Store output channels for fusion module initialization
+        self.output_channels = output_channels
+
+        # Store scale for reference
+        self.output_scale = output_scale
+
+    def forward(self, range_image):
+        """
+        Forward pass through Swin backbone.
+
+        Args:
+            range_image: [B, 5, H, W] - Range image tensor
+                Channels: (inverse_depth, reflectivity, x, y, z)
+                Typical shape: [B, 5, 64, 2048] for SemanticKITTI
+
+        Returns:
+            features: [B, C, H_out, W_out] - Single feature tensor
+                Example for scale=4, input 64x2048: [B, 256, 16, 512]
+        """
+        # Project 5ch → 3ch for pretrained Swin
+        x = self.input_proj(range_image)  # [B, 3, H, W]
+
+        # Swin forward pass - returns list of features at multiple scales
+        features = self.backbone(x)  # List of 4 feature tensors
+
+        # Select target scale feature
+        feat = features[self.feature_idx]  # [B, C_swin, H/scale, W/scale]
+
+        # Optional decoder (not implemented yet)
+        # Could add lightweight decoder here for higher resolution
+        if self.decoder is not None:
+            feat = self.decoder(feat)
+
+        # Output projection to target channels
+        feat = self.output_proj(feat)  # [B, C_out, H_out, W_out]
+
+        return feat
+
+    def get_output_shape(self, input_h, input_w):
+        """
+        Calculate output feature map shape for given input dimensions.
+
+        Args:
+            input_h: Input height (e.g., 64)
+            input_w: Input width (e.g., 2048)
+
+        Returns:
+            (output_h, output_w, output_channels)
+        """
+        output_h = input_h // self.output_scale
+        output_w = input_w // self.output_scale
+        return (output_h, output_w, self.output_channels)

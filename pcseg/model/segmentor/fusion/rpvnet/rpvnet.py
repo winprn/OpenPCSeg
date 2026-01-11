@@ -566,46 +566,74 @@ class RPVNet(BaseSegmentor):
         )
         self.up4 = nn.ModuleList(self.up4)
 
+        # Check if using late fusion (2-branch architecture)
+        fusion_type = model_cfgs.get('FUSION_TYPE', 'hierarchical')
+        self.use_late_fusion = (fusion_type == 'late')
+
         self.multi_scale = self.model_cfgs.get('MULTI_SCALE', 'concat')
         if self.multi_scale == 'concat':
-            self.classifier = nn.Sequential(nn.Linear((cs[4] + cs[6] + cs[8]) * self.block.expansion, self.num_class))
+            if self.use_late_fusion:
+                # Late fusion: single scale features from final decoder output
+                self.classifier = nn.Sequential(nn.Linear(cs[8] * self.block.expansion, self.num_class))
+            else:
+                # Hierarchical fusion: multi-scale features (original architecture)
+                self.classifier = nn.Sequential(nn.Linear((cs[4] + cs[6] + cs[8]) * self.block.expansion, self.num_class))
 
-        self.point_transforms = nn.ModuleList([
-            nn.Sequential(
-               nn.Linear(self.in_feature_dim, cs[0]),
-               nn.SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
-               nn.ReLU(True),
-           ),
-            nn.Sequential(
-                nn.Linear(cs[0], cs[4] * self.block.expansion),
-                nn.SyncBatchNorm(cs[4] * self.block.expansion) if if_dist else BatchNorm(cs[4] * self.block.expansion),
-                nn.ReLU(True),
-            ),
-            nn.Sequential(
-                nn.Linear(cs[4] * self.block.expansion, cs[6] * self.block.expansion),
-                nn.SyncBatchNorm(cs[6] * self.block.expansion) if if_dist else BatchNorm(cs[6] * self.block.expansion),
-                nn.ReLU(True),
-            ),
-            nn.Sequential(
-                nn.Linear(cs[6] * self.block.expansion, cs[8] * self.block.expansion),
-                nn.SyncBatchNorm(cs[8] * self.block.expansion) if if_dist else BatchNorm(cs[8] * self.block.expansion),
-                nn.ReLU(True),
-            )
-        ])
+        # Point transforms only needed for hierarchical fusion
+        if not self.use_late_fusion:
+            self.point_transforms = nn.ModuleList([
+                nn.Sequential(
+                   nn.Linear(self.in_feature_dim, cs[0]),
+                   nn.SyncBatchNorm(cs[0]) if if_dist else BatchNorm(cs[0]),
+                   nn.ReLU(True),
+               ),
+                nn.Sequential(
+                    nn.Linear(cs[0], cs[4] * self.block.expansion),
+                    nn.SyncBatchNorm(cs[4] * self.block.expansion) if if_dist else BatchNorm(cs[4] * self.block.expansion),
+                    nn.ReLU(True),
+                ),
+                nn.Sequential(
+                    nn.Linear(cs[4] * self.block.expansion, cs[6] * self.block.expansion),
+                    nn.SyncBatchNorm(cs[6] * self.block.expansion) if if_dist else BatchNorm(cs[6] * self.block.expansion),
+                    nn.ReLU(True),
+                ),
+                nn.Sequential(
+                    nn.Linear(cs[6] * self.block.expansion, cs[8] * self.block.expansion),
+                    nn.SyncBatchNorm(cs[8] * self.block.expansion) if if_dist else BatchNorm(cs[8] * self.block.expansion),
+                    nn.ReLU(True),
+                )
+            ])
+        else:
+            self.point_transforms = None
 
-        # Range branch selection: SalsaNext (default) or Swin Transformer
+        # Range branch selection: SalsaNext (default), SwinRangeBranch, or SimpleSwinRangeBranch
         range_branch_type = model_cfgs.get('RANGE_BRANCH', 'SalsaNext')
 
-        if range_branch_type == 'SwinRangeBranch':
-            # Lazy import to avoid loading timm if not needed
+        if range_branch_type == 'SimpleSwinRangeBranch':
+            # Simplified Swin for late fusion (2-branch architecture)
+            from .swin_range_branch import SimpleSwinRangeBranch
+            self.range_branch = SimpleSwinRangeBranch(model_cfgs=model_cfgs, input_channels=5)
+        elif range_branch_type == 'SwinRangeBranch':
+            # Original Swin wrapper for hierarchical fusion
             from .swin_range_branch import SwinRangeBranchWrapper
             self.range_branch = SwinRangeBranchWrapper(model_cfgs=model_cfgs, input_channels=5)
         else:
+            # SalsaNext (default)
             self.range_branch = SalsaNext(model_cfgs=model_cfgs, input_channels=5)
 
         if if_dist:
             self.range_branch = nn.SyncBatchNorm.convert_sync_batchnorm(self.range_branch)
         self.grid_sample_mode = 'bilinear'
+
+        # Late fusion module (only for late fusion architecture)
+        if self.use_late_fusion:
+            from .late_fusion import LateFusionModule
+            self.fusion_module = LateFusionModule(
+                voxel_ch=cs[8] * self.block.expansion,  # Final voxel decoder channels
+                range_ch=self.range_branch.output_channels,  # Range branch output channels
+                output_ch=cs[8] * self.block.expansion,  # Match classifier input
+                dropout=model_cfgs.get('FUSION_DROPOUT', 0.3)
+            )
 
         self.weight_initialization()
 
@@ -640,91 +668,141 @@ class RPVNet(BaseSegmentor):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, batch_dict, return_logit=False, return_tta=False): 
-        x = batch_dict['lidar']
-        range_image = batch_dict['range_image']
-        range_pxpy = batch_dict['range_pxpy']
+    def forward(self, batch_dict, return_logit=False, return_tta=False):
+        # Extract inputs
+        x = batch_dict['lidar']  # SparseTensor
+        range_image = batch_dict['range_image']  # [B, 5, H, W]
+        range_pxpy = batch_dict['range_pxpy']  # [N, 3]
         batch_size = range_image.size(0)
         h = range_image.size(2)
         w = range_image.size(3)
 
         x.F = x.F[:, :self.in_feature_dim]
-        # x: SparseTensor z: PointTensor
+        # x: SparseTensor, z: PointTensor
         z = PointTensor(x.F, x.C.float())
-        x0 = initial_voxelize(z, self.pres, self.vres)
-        
-        r_x0 = self.range_branch.stem(range_image)
-        x0 = self.stem(x0)
 
-        z0 = voxel_to_point(x0, z, nearest=False)
-        r_z0 = range_to_point(r_x0, range_pxpy, self.grid_sample_mode)
-        z0_point = self.point_transforms[0](z.F)
-        z0.F = z0.F + r_z0 + z0_point 
+        if self.use_late_fusion:
+            # ============================================
+            # 2-BRANCH LATE FUSION ARCHITECTURE
+            # ============================================
 
-        x1 = point_to_voxel(x0, z0)
-        x1 = self.stage1(x1)
-        x2 = self.stage2(x1)
-        x3 = self.stage3(x2)
-        x4 = self.stage4(x3)
-        r_x1 = point_to_range(z0.F, range_pxpy, batch_size, h, w)
-        r_x1, r_s1 = self.range_branch.stage1(r_x1)
-        r_x2, r_s2 = self.range_branch.stage2(r_x1)
-        r_x3, r_s3 = self.range_branch.stage3(r_x2)
-        r_x4, r_s4 = self.range_branch.stage4(r_x3)
-        # r_x4 = self.range_branch.mid_stage(r_x4)
-        
-        z1 = voxel_to_point(x4, z0)
-        r_z1 = range_to_point(r_x4, range_pxpy, self.grid_sample_mode)
-        z1_point =self.point_transforms[1](z0.F)
-        z1.F = z1.F + r_z1 + z1_point
+            # --- VOXEL BRANCH (independent processing) ---
+            x0 = initial_voxelize(z, self.pres, self.vres)
+            x0 = self.stem(x0)
 
-        y1 = point_to_voxel(x4, z1)
-        r_y1 = point_to_range(z1.F, range_pxpy, batch_size, r_x4.size(2), r_x4.size(3))
-        y1.F = self.dropout(y1.F)
-        y1 = self.up1[0](y1)
-        y1 = torchsparse.cat([y1, x3])
-        y1 = self.up1[1](y1)
-        y2 = self.up2[0](y1)
-        y2 = torchsparse.cat([y2, x2])
-        y2 = self.up2[1](y2)
-        r_y1 = self.range_branch.up1(r_y1, r_s4)
-        r_y2 = self.range_branch.up2(r_y1, r_s3)
+            # Encoder
+            x1 = self.stage1(x0)
+            x2 = self.stage2(x1)
+            x3 = self.stage3(x2)
+            x4 = self.stage4(x3)
 
+            # Decoder with skip connections
+            y1 = self.up1[0](x4)
+            y1 = torchsparse.cat([y1, x3])
+            y1 = self.up1[1](y1)
 
-        z2 = voxel_to_point(y2, z1)
-        r_z2 = range_to_point(r_y2, range_pxpy, self.grid_sample_mode)
-        z2_point = self.point_transforms[2](z1.F)
-        z2.F = z2.F + r_z2 + z2_point
+            y2 = self.up2[0](y1)
+            y2 = torchsparse.cat([y2, x2])
+            y2 = self.up2[1](y2)
 
-        y3 = point_to_voxel(y2, z2)
-        r_y3 = point_to_range(z2.F, range_pxpy, batch_size, r_y2.size(2), r_y2.size(3))
-        y3.F = self.dropout(y3.F)
-        y3 = self.up3[0](y3)
-        y3 = torchsparse.cat([y3, x1])
-        y3 = self.up3[1](y3)
-        y4 = self.up4[0](y3)
-        y4 = torchsparse.cat([y4, x0])
-        y4 = self.up4[1](y4)
-        r_y3 = self.range_branch.up3(r_y3, r_s2)
-        r_y4 = self.range_branch.up4(r_y3, r_s1)
+            y3 = self.up3[0](y2)
+            y3 = torchsparse.cat([y3, x1])
+            y3 = self.up3[1](y3)
 
+            y4 = self.up4[0](y3)
+            y4 = torchsparse.cat([y4, x0])
+            y4 = self.up4[1](y4)  # Final voxel features: SparseTensor
 
-        z3 = voxel_to_point(y4, z2)
-        r_z3 = range_to_point(r_y4, range_pxpy, self.grid_sample_mode)
-        z3_point = self.point_transforms[3](z2.F)
-        z3.F = z3.F + r_z3 + z3_point
+            # --- RANGE BRANCH (independent processing) ---
+            range_features = self.range_branch(range_image)  # [B, C, H', W']
 
-        if self.multi_scale == 'concat':
-            out = self.classifier(torch.cat([z1.F, z2.F, z3.F], dim=1))
-        elif self.multi_scale == 'sum':
-            out = self.classifier(self.l1(z1.F) + self.l2(z2.F) + z3.F)
-        elif self.multi_scale == 'se':
-            attn = torch.cat([z1.F, z2.F, z3.F], dim=1)
-            attn = self.pool(attn.permute(1, 0)).permute(1, 0)
-            attn = self.attn(attn)
-            out = self.classifier(torch.cat([z1.F, z2.F, z3.F], dim=1) * attn)
+            # --- LATE FUSION ---
+            fused_features = self.fusion_module(
+                voxel_features=y4,
+                range_features=range_features,
+                range_pxpy=range_pxpy,
+                z=z,
+                grid_sample_mode=self.grid_sample_mode
+            )  # [N, C_out]
+
+            # --- CLASSIFICATION ---
+            out = self.classifier(fused_features)
+
         else:
-            out = self.classifier(z3.F)
+            # ============================================
+            # ORIGINAL HIERARCHICAL FUSION (backward compatibility)
+            # ============================================
+            x0 = initial_voxelize(z, self.pres, self.vres)
+
+            r_x0 = self.range_branch.stem(range_image)
+            x0 = self.stem(x0)
+
+            z0 = voxel_to_point(x0, z, nearest=False)
+            r_z0 = range_to_point(r_x0, range_pxpy, self.grid_sample_mode)
+            z0_point = self.point_transforms[0](z.F)
+            z0.F = z0.F + r_z0 + z0_point
+
+            x1 = point_to_voxel(x0, z0)
+            x1 = self.stage1(x1)
+            x2 = self.stage2(x1)
+            x3 = self.stage3(x2)
+            x4 = self.stage4(x3)
+            r_x1 = point_to_range(z0.F, range_pxpy, batch_size, h, w)
+            r_x1, r_s1 = self.range_branch.stage1(r_x1)
+            r_x2, r_s2 = self.range_branch.stage2(r_x1)
+            r_x3, r_s3 = self.range_branch.stage3(r_x2)
+            r_x4, r_s4 = self.range_branch.stage4(r_x3)
+
+            z1 = voxel_to_point(x4, z0)
+            r_z1 = range_to_point(r_x4, range_pxpy, self.grid_sample_mode)
+            z1_point = self.point_transforms[1](z0.F)
+            z1.F = z1.F + r_z1 + z1_point
+
+            y1 = point_to_voxel(x4, z1)
+            r_y1 = point_to_range(z1.F, range_pxpy, batch_size, r_x4.size(2), r_x4.size(3))
+            y1.F = self.dropout(y1.F)
+            y1 = self.up1[0](y1)
+            y1 = torchsparse.cat([y1, x3])
+            y1 = self.up1[1](y1)
+            y2 = self.up2[0](y1)
+            y2 = torchsparse.cat([y2, x2])
+            y2 = self.up2[1](y2)
+            r_y1 = self.range_branch.up1(r_y1, r_s4)
+            r_y2 = self.range_branch.up2(r_y1, r_s3)
+
+            z2 = voxel_to_point(y2, z1)
+            r_z2 = range_to_point(r_y2, range_pxpy, self.grid_sample_mode)
+            z2_point = self.point_transforms[2](z1.F)
+            z2.F = z2.F + r_z2 + z2_point
+
+            y3 = point_to_voxel(y2, z2)
+            r_y3 = point_to_range(z2.F, range_pxpy, batch_size, r_y2.size(2), r_y2.size(3))
+            y3.F = self.dropout(y3.F)
+            y3 = self.up3[0](y3)
+            y3 = torchsparse.cat([y3, x1])
+            y3 = self.up3[1](y3)
+            y4 = self.up4[0](y3)
+            y4 = torchsparse.cat([y4, x0])
+            y4 = self.up4[1](y4)
+            r_y3 = self.range_branch.up3(r_y3, r_s2)
+            r_y4 = self.range_branch.up4(r_y3, r_s1)
+
+            z3 = voxel_to_point(y4, z2)
+            r_z3 = range_to_point(r_y4, range_pxpy, self.grid_sample_mode)
+            z3_point = self.point_transforms[3](z2.F)
+            z3.F = z3.F + r_z3 + z3_point
+
+            if self.multi_scale == 'concat':
+                out = self.classifier(torch.cat([z1.F, z2.F, z3.F], dim=1))
+            elif self.multi_scale == 'sum':
+                out = self.classifier(self.l1(z1.F) + self.l2(z2.F) + z3.F)
+            elif self.multi_scale == 'se':
+                attn = torch.cat([z1.F, z2.F, z3.F], dim=1)
+                attn = self.pool(attn.permute(1, 0)).permute(1, 0)
+                attn = self.attn(attn)
+                out = self.classifier(torch.cat([z1.F, z2.F, z3.F], dim=1) * attn)
+            else:
+                out = self.classifier(z3.F)
 
         if self.training:
             target = batch_dict['targets'].F.long().cuda(non_blocking=True)

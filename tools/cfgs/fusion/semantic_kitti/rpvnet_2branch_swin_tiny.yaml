@@ -1,0 +1,101 @@
+MODALITY: 'fusion'
+
+DATA:
+    DATASET: 'semantickitti'  # choices: ['nuscenes', 'semantickitti', 'scribblekitti']
+    PETRELOSS_CONFIG: None
+    DATA_PATH: '/raid/nnthao01/AutonomousDriving/dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences'
+    VOXEL_SIZE: 0.05
+    AUGMENT: 'GlobalAugment_LP'  # choices: ['GlobalAugment', 'GlobalAugment_LP']
+    NUM_POINTS: 1000000
+    TRAINVAL: False              # train set: train + val
+    TTA: False
+
+MODEL:
+    NAME: RPVNet
+    IGNORE_LABEL: 0
+    IN_FEATURE_DIM: 5
+    BLOCK: Bottleneck            # Use Bottleneck for better capacity
+    NUM_LAYER: [2, 3, 4, 6, 2, 2, 2, 2]
+    PLANES: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+    cr: 1.75
+
+    # ============================================
+    # 2-BRANCH LATE FUSION CONFIGURATION
+    # ============================================
+    FUSION_TYPE: 'late'  # 'late' for 2-branch late fusion, 'hierarchical' for original
+
+    # Simplified Swin Transformer Range Branch
+    RANGE_BRANCH: 'SimpleSwinRangeBranch'        # Use simplified Swin for late fusion
+    SWIN_VARIANT: 'swin_tiny_patch4_window7_224' # Swin-Tiny for efficiency
+    SWIN_PRETRAINED: True                         # Use ImageNet-1K pretrained weights
+    SWIN_OUTPUT_SCALE: 4                          # Output at 1/4 resolution (16x512 for 64x2048 input)
+    SWIN_OUTPUT_CHANNELS: 256                     # Swin output feature channels
+
+    # Late Fusion Module Configuration
+    FUSION_STRATEGY: 'concat_mlp'  # Fusion strategy: 'concat_mlp' or 'attention'
+    FUSION_DROPOUT: 0.3            # Dropout in fusion MLP for regularization
+
+    # Multi-scale fusion (only single scale used in late fusion)
+    MULTI_SCALE: 'concat'          # Keep for compatibility, but only z3 features used
+
+    # Regularization
+    DROPOUT_P: 0.3                 # Dropout for voxel branch
+    LABEL_SMOOTHING: 0.0           # Label smoothing for cross-entropy loss
+    IF_DIST: True                  # True: multi-gpus, False: single gpu
+
+    # Loss Configuration
+    LOSS_CONFIG:
+        LOSS_TYPES: ['CELoss', 'LovLoss']  # Cross-entropy + Lovász-Softmax
+        LOSS_WEIGHTS: [1.0, 1.0]            # Equal weighting
+        KNN: 10                              # K-nearest neighbors for GeoLoss (if used)
+
+OPTIM:
+    BATCH_SIZE_PER_GPU: 4        # Reduced batch size (Swin uses more memory than SalsaNext)
+    NUM_EPOCHS: 100              # More epochs for 2-branch training
+    OPTIMIZER: adamw             # AdamW optimizer (better for transformers)
+    LR_PER_SAMPLE: 0.0001        # Base learning rate
+    LR_RANGE_RATIO: 0.1          # Range branch uses 10% of base LR (differential learning rate)
+    WEIGHT_DECAY: 0.01           # Weight decay for regularization
+    GRAD_NORM_CLIP: 10           # Gradient norm clipping for stability
+    SCHEDULER: linear_warmup_with_cosdecay
+    WARMUP_EPOCH: 5              # Longer warmup for stable training
+
+    # Optional: Two-stage training strategy
+    FREEZE_RANGE_EPOCHS: 10      # Freeze Swin encoder for first 10 epochs (set to 0 to disable)
+
+# ============================================
+# NOTES FOR TRAINING
+# ============================================
+#
+# This configuration implements the 2-branch late fusion architecture:
+# - Voxel Branch: 3D sparse convolutional U-Net (independent processing)
+# - Range Branch: Swin Transformer (independent processing)
+# - Late Fusion: Fuse final features at point level before classification
+#
+# Key differences from hierarchical fusion (rpvnet_swin_tiny_cr17_5.yaml):
+# - FUSION_TYPE: 'late' instead of 'hierarchical'
+# - RANGE_BRANCH: 'SimpleSwinRangeBranch' instead of 'SwinRangeBranch'
+# - No point branch (removed from architecture)
+# - Single fusion point instead of 4 hierarchical fusion points
+#
+# Training tips:
+# 1. Start with lower batch size (4 per GPU) due to memory constraints
+# 2. Use differential learning rates (LR_RANGE_RATIO: 0.1)
+# 3. Optionally freeze Swin encoder for first 10 epochs (FREEZE_RANGE_EPOCHS: 10)
+# 4. Monitor both branch gradients to ensure both are learning
+# 5. If OOM, try:
+#    - Reduce BATCH_SIZE_PER_GPU to 2
+#    - Reduce SWIN_OUTPUT_CHANNELS to 128
+#    - Change SWIN_OUTPUT_SCALE to 8 (lower resolution)
+#
+# Expected performance:
+# - Target mIoU: 65-68% on SemanticKITTI validation
+# - Comparison: May be 1-2 points lower than hierarchical fusion
+# - Trade-off: Simpler architecture, easier to debug and modify
+#
+# To train:
+#   python train.py --cfg_file tools/cfgs/fusion/semantic_kitti/rpvnet_2branch_swin_tiny.yaml
+#
+# To test:
+#   python test.py --cfg_file tools/cfgs/fusion/semantic_kitti/rpvnet_2branch_swin_tiny.yaml \
+#                  --ckpt <checkpoint_path>
