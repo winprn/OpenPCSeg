@@ -606,17 +606,29 @@ class RPVNet(BaseSegmentor):
         else:
             self.point_transforms = None
 
-        # Range branch selection: SalsaNext (default), SwinRangeBranch, or SimpleSwinRangeBranch
+        # Range branch selection: Multiple options available
         range_branch_type = model_cfgs.get('RANGE_BRANCH', 'SalsaNext')
 
         if range_branch_type == 'SimpleSwinRangeBranch':
-            # Simplified Swin for late fusion (2-branch architecture)
+            # Simplified Swin for late fusion (may have issues with 64x2048 images)
             from .swin_range_branch import SimpleSwinRangeBranch
             self.range_branch = SimpleSwinRangeBranch(model_cfgs=model_cfgs, input_channels=5)
         elif range_branch_type == 'SwinRangeBranch':
             # Original Swin wrapper for hierarchical fusion
             from .swin_range_branch import SwinRangeBranchWrapper
             self.range_branch = SwinRangeBranchWrapper(model_cfgs=model_cfgs, input_channels=5)
+        elif range_branch_type == 'ConvNext':
+            # ConvNeXt backbone (RECOMMENDED for 64x2048 images)
+            from .flexible_range_branch import ConvNextRangeBranch
+            self.range_branch = ConvNextRangeBranch(model_cfgs=model_cfgs, input_channels=5)
+        elif range_branch_type == 'ResNet':
+            # ResNet backbone (STABLE and FAST)
+            from .flexible_range_branch import ResNetRangeBranch
+            self.range_branch = ResNetRangeBranch(model_cfgs=model_cfgs, input_channels=5)
+        elif range_branch_type == 'FlexibleViT':
+            # Flexible ViT with multiple backbone options
+            from .flexible_range_branch import FlexibleViTRangeBranch
+            self.range_branch = FlexibleViTRangeBranch(model_cfgs=model_cfgs, input_channels=5)
         else:
             # SalsaNext (default)
             self.range_branch = SalsaNext(model_cfgs=model_cfgs, input_channels=5)

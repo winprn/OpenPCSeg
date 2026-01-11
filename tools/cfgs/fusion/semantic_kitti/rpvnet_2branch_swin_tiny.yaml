@@ -25,9 +25,12 @@ MODEL:
     FUSION_TYPE: 'late'  # 'late' for 2-branch late fusion, 'hierarchical' for original
 
     # Simplified Swin Transformer Range Branch
+    # NOTE: Swin may have issues with 64x2048 images due to window attention
+    # RECOMMENDED: Use ConvNext instead (rpvnet_2branch_convnext_tiny.yaml)
     RANGE_BRANCH: 'SimpleSwinRangeBranch'        # Use simplified Swin for late fusion
     SWIN_VARIANT: 'swin_tiny_patch4_window7_224' # Swin-Tiny for efficiency
     SWIN_PRETRAINED: True                         # Use ImageNet-1K pretrained weights
+    RANGE_IMG_SIZE: [64, 2048]                    # Range image size (H, W) - critical for Swin!
     SWIN_OUTPUT_SCALE: 4                          # Output at 1/4 resolution (16x512 for 64x2048 input)
     SWIN_OUTPUT_CHANNELS: 256                     # Swin output feature channels
 

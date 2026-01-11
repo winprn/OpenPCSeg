@@ -625,6 +625,7 @@ class SimpleSwinRangeBranch(nn.Module):
         pretrained = model_cfgs.get('SWIN_PRETRAINED', True)
         output_scale = model_cfgs.get('SWIN_OUTPUT_SCALE', 4)  # 1/4 resolution
         output_channels = model_cfgs.get('SWIN_OUTPUT_CHANNELS', 256)
+        range_img_size = model_cfgs.get('RANGE_IMG_SIZE', [64, 2048])  # [H, W]
 
         # Input projection: 5 channels → 3 channels (for pretrained Swin)
         # Range images have 5 channels: (inverse_depth, reflectivity, x, y, z)
@@ -642,12 +643,29 @@ class SimpleSwinRangeBranch(nn.Module):
             self.input_proj.bias.zero_()
 
         # Swin encoder (pretrained on ImageNet)
-        self.backbone = timm.create_model(
-            swin_variant,
-            pretrained=pretrained,
-            features_only=True,
-            out_indices=[0, 1, 2, 3]  # 4 scales: 1/4, 1/8, 1/16, 1/32
-        )
+        # Note: Swin has strict input size requirements due to window attention
+        # We need to specify img_size to match our range images
+        try:
+            self.backbone = timm.create_model(
+                swin_variant,
+                pretrained=pretrained,
+                features_only=True,
+                out_indices=[0, 1, 2, 3],  # 4 scales: 1/4, 1/8, 1/16, 1/32
+                img_size=range_img_size,  # Specify range image size
+            )
+        except Exception as e:
+            print(f"Warning: Failed to create Swin with img_size={range_img_size}: {e}")
+            print("Attempting to create without img_size parameter...")
+            self.backbone = timm.create_model(
+                swin_variant,
+                pretrained=pretrained,
+                features_only=True,
+                out_indices=[0, 1, 2, 3],
+            )
+            # Manually adjust patch embedding for non-standard sizes
+            if hasattr(self.backbone, 'patch_embed'):
+                self.backbone.patch_embed.img_size = tuple(range_img_size)
+                self.backbone.patch_embed.strict_img_size = False
 
         # Get channel dimensions from Swin
         # Example for swin_tiny: [96, 192, 384, 768] at scales [1/4, 1/8, 1/16, 1/32]

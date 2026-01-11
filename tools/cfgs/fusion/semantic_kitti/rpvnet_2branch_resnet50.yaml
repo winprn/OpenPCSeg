@@ -1,0 +1,119 @@
+MODALITY: 'fusion'
+
+DATA:
+    DATASET: 'semantickitti'
+    PETRELOSS_CONFIG: None
+    DATA_PATH: '/raid/nnthao01/AutonomousDriving/dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences'
+    VOXEL_SIZE: 0.05
+    AUGMENT: 'GlobalAugment_LP'
+    NUM_POINTS: 1000000
+    TRAINVAL: False
+    TTA: False
+
+MODEL:
+    NAME: RPVNet
+    IGNORE_LABEL: 0
+    IN_FEATURE_DIM: 5
+    BLOCK: Bottleneck
+    NUM_LAYER: [2, 3, 4, 6, 2, 2, 2, 2]
+    PLANES: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+    cr: 1.75
+
+    # ============================================
+    # 2-BRANCH LATE FUSION WITH RESNET
+    # ============================================
+    FUSION_TYPE: 'late'
+
+    # ResNet Range Branch (STABLE BASELINE)
+    # Classic ResNet architecture - very stable, fast, and well-understood.
+    # Perfect for establishing a baseline before trying more complex architectures.
+    RANGE_BRANCH: 'ResNet'
+    RESNET_VARIANT: 'resnet50'               # Options: resnet18, resnet34, resnet50, resnet101
+    RESNET_PRETRAINED: True                  # Use ImageNet pretrained weights
+    RESNET_OUTPUT_SCALE: 4                   # Output at 1/4 resolution (16x512 for 64x2048 input)
+    RESNET_OUTPUT_CHANNELS: 256              # Output feature channels
+
+    # Late Fusion Configuration
+    FUSION_STRATEGY: 'concat_mlp'
+    FUSION_DROPOUT: 0.3
+
+    # Classifier Configuration
+    MULTI_SCALE: 'concat'
+    DROPOUT_P: 0.3
+    LABEL_SMOOTHING: 0.0
+    IF_DIST: True
+
+    # Loss Configuration
+    LOSS_CONFIG:
+        LOSS_TYPES: ['CELoss', 'LovLoss']
+        LOSS_WEIGHTS: [1.0, 1.0]
+        KNN: 10
+
+OPTIM:
+    BATCH_SIZE_PER_GPU: 6                    # Can handle larger batch size than ConvNeXt
+    NUM_EPOCHS: 100
+    OPTIMIZER: adamw
+    LR_PER_SAMPLE: 0.0001
+    LR_RANGE_RATIO: 0.1
+    WEIGHT_DECAY: 0.01
+    GRAD_NORM_CLIP: 10
+    SCHEDULER: linear_warmup_with_cosdecay
+    WARMUP_EPOCH: 5
+
+    FREEZE_RANGE_EPOCHS: 0
+
+# ============================================
+# WHY RESNET AS BASELINE?
+# ============================================
+#
+# ResNet advantages:
+# 1. STABLE - 10+ years of proven performance
+# 2. FAST - Efficient computation, can use larger batch sizes
+# 3. WELL-UNDERSTOOD - Easy to debug and tune
+# 4. NO INPUT SIZE ISSUES - Works with any image size
+# 5. STRONG BASELINE - Good starting point before trying fancy architectures
+# 6. LESS MEMORY - Uses less GPU memory than transformers
+#
+# ResNet variants:
+# - resnet18: 11M params - Fast, good for quick experiments
+# - resnet34: 21M params - Good balance
+# - resnet50: 25M params - RECOMMENDED, best accuracy/speed trade-off
+# - resnet101: 44M params - Better accuracy but slower
+#
+# Expected performance:
+# - Target mIoU: 63-67% on SemanticKITTI validation
+# - Lower than ConvNeXt/Swin but very stable
+# - Good baseline for comparison
+#
+# Use ResNet when:
+# - You want stable, reproducible results
+# - You're debugging the fusion pipeline
+# - You have limited GPU memory
+# - You need fast iteration cycles
+#
+# Use ConvNeXt/Swin when:
+# - You want state-of-the-art accuracy
+# - You have sufficient GPU memory
+# - Training stability is acceptable
+#
+# ============================================
+# TRAINING GUIDE
+# ============================================
+#
+# To train:
+#   python train.py --cfg_file tools/cfgs/fusion/semantic_kitti/rpvnet_2branch_resnet50.yaml
+#
+# This config should train very smoothly with minimal issues.
+# If this doesn't work, there's likely a bug in the fusion pipeline.
+#
+# Recommended workflow:
+# 1. Train ResNet50 baseline first (this config)
+# 2. Verify fusion pipeline works correctly
+# 3. Switch to ConvNeXt for better accuracy
+# 4. Experiment with Swin if you want transformers
+#
+# Expected training behavior:
+# - Loss should decrease smoothly from epoch 1
+# - No NaN or divergence issues
+# - Validation mIoU should improve steadily
+# - Training speed: ~3-4 min/epoch on 4x V100 GPUs

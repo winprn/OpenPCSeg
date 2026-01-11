@@ -1,0 +1,114 @@
+MODALITY: 'fusion'
+
+DATA:
+    DATASET: 'semantickitti'
+    PETRELOSS_CONFIG: None
+    DATA_PATH: '/raid/nnthao01/AutonomousDriving/dataset/SemanticKitti/data_odometry_velodyne/dataset/sequences'
+    VOXEL_SIZE: 0.05
+    AUGMENT: 'GlobalAugment_LP'
+    NUM_POINTS: 1000000
+    TRAINVAL: False
+    TTA: False
+
+MODEL:
+    NAME: RPVNet
+    IGNORE_LABEL: 0
+    IN_FEATURE_DIM: 5
+    BLOCK: Bottleneck
+    NUM_LAYER: [2, 3, 4, 6, 2, 2, 2, 2]
+    PLANES: [32, 32, 64, 128, 256, 256, 128, 96, 96]
+    cr: 1.75
+
+    # ============================================
+    # 2-BRANCH LATE FUSION WITH CONVNEXT
+    # ============================================
+    FUSION_TYPE: 'late'
+
+    # ConvNeXt Range Branch (RECOMMENDED for 64x2048 range images)
+    # ConvNeXt is a modernized CNN that achieves ViT-level performance
+    # without strict input size requirements. Works excellently with non-square images.
+    RANGE_BRANCH: 'ConvNext'
+    CONVNEXT_VARIANT: 'convnext_tiny'       # Options: convnext_tiny, convnext_small, convnext_base
+    CONVNEXT_PRETRAINED: True                # Use ImageNet-22K or 1K pretrained weights
+    CONVNEXT_OUTPUT_SCALE: 4                 # Output at 1/4 resolution (16x512 for 64x2048 input)
+    CONVNEXT_OUTPUT_CHANNELS: 256            # Output feature channels
+
+    # Late Fusion Configuration
+    FUSION_STRATEGY: 'concat_mlp'
+    FUSION_DROPOUT: 0.3
+
+    # Classifier Configuration
+    MULTI_SCALE: 'concat'
+    DROPOUT_P: 0.3
+    LABEL_SMOOTHING: 0.0
+    IF_DIST: True
+
+    # Loss Configuration
+    LOSS_CONFIG:
+        LOSS_TYPES: ['CELoss', 'LovLoss']
+        LOSS_WEIGHTS: [1.0, 1.0]
+        KNN: 10
+
+OPTIM:
+    BATCH_SIZE_PER_GPU: 4                    # Start with 4, can increase to 8 if memory allows
+    NUM_EPOCHS: 100
+    OPTIMIZER: adamw
+    LR_PER_SAMPLE: 0.0001                    # Base learning rate
+    LR_RANGE_RATIO: 0.1                      # Range branch: 1e-5, Voxel branch: 1e-4
+    WEIGHT_DECAY: 0.01
+    GRAD_NORM_CLIP: 10
+    SCHEDULER: linear_warmup_with_cosdecay
+    WARMUP_EPOCH: 5
+
+    # Optional: Freeze ConvNeXt encoder for initial epochs
+    FREEZE_RANGE_EPOCHS: 0                   # Set to 10 if training is unstable
+
+# ============================================
+# WHY CONVNEXT?
+# ============================================
+#
+# ConvNeXt advantages over Swin Transformer:
+# 1. NO strict input size requirements - works perfectly with 64x2048
+# 2. NO window attention limitations - handles arbitrary aspect ratios
+# 3. Efficient computation - similar speed to ResNet
+# 4. Strong performance - achieves 87.8% ImageNet top-1 (comparable to Swin)
+# 5. Stable training - easier to train than transformers
+# 6. Better transfer learning - CNNs often transfer better to range images
+#
+# ConvNeXt vs ResNet:
+# - ConvNeXt: Modern architecture, better accuracy (+3-5 mIoU expected)
+# - ResNet: Classic architecture, faster, very stable
+#
+# ConvNeXt variants comparison:
+# - convnext_tiny: 28M params, ~90 GFLOPS - RECOMMENDED
+# - convnext_small: 50M params, ~150 GFLOPS - Better accuracy but slower
+# - convnext_base: 89M params, ~260 GFLOPS - Best accuracy but needs more memory
+#
+# Expected performance:
+# - Target mIoU: 65-70% on SemanticKITTI validation
+# - Should match or exceed Swin performance
+# - More stable training than Swin
+#
+# ============================================
+# TRAINING GUIDE
+# ============================================
+#
+# To train:
+#   python train.py --cfg_file tools/cfgs/fusion/semantic_kitti/rpvnet_2branch_convnext_tiny.yaml
+#
+# Monitor these metrics:
+# 1. Both branch gradients (range and voxel should both be learning)
+# 2. Training loss curve (should decrease smoothly)
+# 3. Validation mIoU every 5 epochs
+#
+# If you encounter issues:
+# - OOM: Reduce BATCH_SIZE_PER_GPU to 2
+# - Unstable training: Increase WARMUP_EPOCH to 10, lower LR_PER_SAMPLE to 5e-5
+# - Poor range branch learning: Increase LR_RANGE_RATIO to 0.2 or 0.3
+# - Overfitting: Increase FUSION_DROPOUT to 0.4 or 0.5
+#
+# Ablation experiments to try:
+# 1. Voxel-only baseline (comment out range branch)
+# 2. Different output scales (4, 8, 16)
+# 3. Different ConvNeXt variants (tiny, small)
+# 4. Different fusion strategies (concat_mlp, attention)
